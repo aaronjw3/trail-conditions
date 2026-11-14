@@ -11,9 +11,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - run: test -z "$(gofmt -l *.go)"
+      - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
-      - run: go test -race -cover ./...
+      - run: go test -race -coverpkg=./... -coverprofile=coverage.out ./...
+      - run: go tool cover -func=coverage.out
       - run: go build ./...
       - run: node --check --input-type=module < web/app.js
       - run: node --test map.test.cjs
+      - run: docker build -t trail-conditions .

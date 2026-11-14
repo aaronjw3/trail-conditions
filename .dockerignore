@@ -1,0 +1,9 @@
+.git
+.github
+.env
+.env.*
+data
+trail-conditions
+coverage.out
+*.test
+.DS_Store

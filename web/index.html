@@ -14,8 +14,8 @@
 <h1>One route.<br>Changing skies.</h1>
 <p class="intro">Explore the weather along your route, one location and hour at a time.</p>
 <form id="upload" hx-post="/forecast" hx-encoding="multipart/form-data" hx-disabled-elt="find button" hx-indicator="#loading">
-<label for="file">Your route <span>GPX · up to 2 MB</span></label>
-<input id="file" name="route" type="file" accept=".gpx,application/gpx+xml" required>
+<label for="file">Your route <span>GPX / KML / KMZ · 2 MB</span></label>
+<input id="file" name="route" type="file" accept=".gpx,.kml,.kmz,application/gpx+xml,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz" required>
 <button type="submit" id="submit">Explore forecast <span>↗</span></button>
 </form>
 <button id="example" class="secondary" hx-post="/example" hx-disabled-elt="this" hx-indicator="#loading">Try the foothills example</button>

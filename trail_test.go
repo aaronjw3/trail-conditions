@@ -1,44 +1,30 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/aaronjw3/trail-conditions/internal/adapters/geoimport"
+	"github.com/aaronjw3/trail-conditions/internal/adapters/httpui"
+	"github.com/aaronjw3/trail-conditions/internal/adapters/openmeteo"
+	"github.com/aaronjw3/trail-conditions/internal/adapters/snapshotfile"
+	"github.com/aaronjw3/trail-conditions/internal/application"
+	"github.com/aaronjw3/trail-conditions/internal/domain"
 )
 
 const twoSegments = `<gpx><trk><trkseg><trkpt lat="45" lon="-111"/><trkpt lat="45.1" lon="-111.1"/></trkseg><trkseg><trkpt lat="46" lon="-112"/><trkpt lat="46.1" lon="-112.1"/></trkseg></trk></gpx>`
-
-func TestGPXPreservesSegmentsAndRejectsInvalidGeometry(t *testing.T) {
-	route, points, err := parseRoute(strings.NewReader(twoSegments))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(route.Coordinates) != 2 || len(points) != 4 || route.Coordinates[0][0] != (Point{-111, 45}) {
-		t.Fatalf("geometry lost or reordered: %+v %v", route, points)
-	}
-	for _, input := range []string{
-		strings.Replace(twoSegments, `lat="45"`, `lat="NaN"`, 1),
-		strings.Replace(twoSegments, `lon="-111"`, `lon="181"`, 1),
-		strings.Replace(twoSegments, `lat="45"`, ``, 1),
-		`<gpx><trk><trkseg><trkpt lat="1" lon="1"/></trkseg></trk></gpx>`,
-		`<gpx><wpt lat="1" lon="1"/></gpx>`,
-		twoSegments + `<gpx/>`,
-		strings.Replace(twoSegments, `lat="45.1" lon="-111.1"`, `lat="45" lon="-111"`, 1),
-	} {
-		if _, _, err := parseRoute(strings.NewReader(input)); err == nil {
-			t.Fatalf("accepted invalid GPX: %s", input)
-		}
-	}
-}
 
 // Controlled HTTP responses exercise provider parsing without external API calls.
 // They do not establish DNS/TLS behavior or live Open-Meteo compatibility.
@@ -80,7 +66,7 @@ func TestForecastRejectsMissingValuesUnitsAndTimeGaps(t *testing.T) {
 				}
 				return response(200, body), nil
 			})}
-			result, err := fetchForecast(context.Background(), client, "https://example.test", Point{-111, 45})
+			result, err := (openmeteo.Client{HTTP: client, Endpoint: "https://example.test"}).Forecast(context.Background(), domain.Point{-111, 45})
 			if name == "valid" {
 				if err != nil || len(result.Times) != 72 {
 					t.Fatalf("%+v %v", result, err)
@@ -92,168 +78,215 @@ func TestForecastRejectsMissingValuesUnitsAndTimeGaps(t *testing.T) {
 	}
 }
 
-func TestFailedRefreshPreservesPublishedSnapshot(t *testing.T) {
+func newService(t *testing.T, path string, transport transportFunc) *application.Service {
+	t.Helper()
+	service, err := application.New(context.Background(), geoimport.Decoder{}, openmeteo.Client{HTTP: &http.Client{Transport: transport}, Endpoint: "https://example.test"}, snapshotfile.Store{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+func TestFailedRefreshPreservesPublishedSnapshotAndReloads(t *testing.T) {
 	valid := forecastJSON(t, false)
 	calls := 0
 	fail := false
-	a := &app{file: filepath.Join(t.TempDir(), "snapshot.json"), endpoint: "https://example.test", client: &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+	path := filepath.Join(t.TempDir(), "snapshot.json")
+	transport := transportFunc(func(*http.Request) (*http.Response, error) {
 		calls++
 		if fail && calls%2 == 0 {
 			return response(200, forecastJSON(t, true)), nil
 		}
 		return response(200, valid), nil
-	})}}
-	route, points, err := parseRoute(strings.NewReader(twoSegments))
-	if err != nil {
+	})
+	service := newService(t, path, transport)
+	if err := service.Import(context.Background(), "route.gpx", []byte(twoSegments)); err != nil {
 		t.Fatal(err)
 	}
-	if err = a.collect(context.Background(), route, points); err != nil {
-		t.Fatal(err)
-	}
-	old := a.snapshot
-	before, err := os.ReadFile(a.file)
+	old := service.Snapshot()
+	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fail = true
-	if err = a.collect(context.Background(), route, points); err == nil {
-		t.Fatal("published incomplete refresh")
+	if err := service.Refresh(context.Background()); err == nil {
+		t.Fatal("published partial result")
 	}
-	after, err := os.ReadFile(a.file)
+	after, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.snapshot != old || !bytes.Equal(before, after) {
-		t.Fatal("failed refresh replaced published state")
+	if !reflect.DeepEqual(old, service.Snapshot()) || !bytes.Equal(before, after) {
+		t.Fatal("failed refresh changed snapshot")
 	}
-	files, err := os.ReadDir(filepath.Dir(a.file))
-	if err != nil || len(files) != 1 {
-		t.Fatal("temporary files left behind", err)
+	reloaded := newService(t, path, transport)
+	if !reflect.DeepEqual(old, reloaded.Snapshot()) {
+		t.Fatal("restart lost snapshot")
+	}
+	copy := service.Snapshot()
+	copy.Forecasts[0].Temperature[0] = 999
+	copy.Route.Coordinates[0][0][0] = 0
+	if !reflect.DeepEqual(old, service.Snapshot()) {
+		t.Fatal("caller can mutate publication")
 	}
 }
-
-func TestUploadReturnsHTMXPanelAndRejectsCrossOriginWrites(t *testing.T) {
+func TestHTTPUploadsRenderHTMLForAllFormats(t *testing.T) {
 	valid := forecastJSON(t, false)
-	a := &app{busy: make(chan struct{}, 1), file: filepath.Join(t.TempDir(), "snapshot.json"), endpoint: "https://example.test", client: &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) { return response(200, valid), nil })}}
-	handler := a.routes()
+	service := newService(t, filepath.Join(t.TempDir(), "snapshot.json"), func(*http.Request) (*http.Response, error) { return response(200, valid), nil })
+	ui, err := httpui.New(service, assets, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := ui.Routes()
 	denied := httptest.NewRecorder()
 	handler.ServeHTTP(denied, httptest.NewRequest("POST", "/example", nil))
 	if denied.Code != 403 {
 		t.Fatal("accepted unmarked write")
 	}
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	part, err := writer.CreateFormFile("route", "route.gpx")
+
+	kml := `<kml><Document><Placemark><MultiGeometry><LineString><coordinates>-111,45 -111.1,45.1</coordinates></LineString><LineString><coordinates>-112,46 -112.1,46.1</coordinates></LineString></MultiGeometry></Placemark></Document></kml>`
+	var archive bytes.Buffer
+	zw := zip.NewWriter(&archive)
+	member, err := zw.Create("doc.kml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	io.WriteString(part, twoSegments)
-	writer.Close()
-	req := httptest.NewRequest("POST", "/forecast", &body)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("HX-Request", "true")
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, req)
-	if recorder.Code != 200 || !strings.Contains(recorder.Body.String(), `hx-get="/panel"`) || !strings.Contains(recorder.Body.String(), "SAMPLE 4") {
-		t.Fatalf("bad HTML response: %d %s", recorder.Code, recorder.Body.String())
+	if _, err = io.WriteString(member, kml); err != nil {
+		t.Fatal(err)
+	}
+	if err = zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for filename, input := range map[string][]byte{"route.gpx": []byte(twoSegments), "route.kml": []byte(kml), "route.kmz": archive.Bytes()} {
+
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
+		part, err := writer.CreateFormFile("route", filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		part.Write(input)
+		writer.Close()
+		req := httptest.NewRequest("POST", "/forecast", &body)
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		req.Header.Set("HX-Request", "true")
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, req)
+		if recorder.Code != 200 || !strings.Contains(recorder.Body.String(), `hx-get="/panel"`) || !strings.Contains(recorder.Body.String(), "SAMPLE 4") {
+			t.Fatalf("%s: %d %s", filename, recorder.Code, recorder.Body.String())
+		}
 	}
 	panel := httptest.NewRecorder()
 	handler.ServeHTTP(panel, httptest.NewRequest("GET", "/panel?hour=71&metric=wind", nil))
 	if panel.Code != 200 || !strings.Contains(panel.Body.String(), `value="wind" selected`) {
-		t.Fatal("selection not rendered", panel.Body.String())
+		t.Fatal("selection not rendered")
 	}
 	invalid := httptest.NewRecorder()
 	handler.ServeHTTP(invalid, httptest.NewRequest("GET", "/panel?hour=72", nil))
 	if invalid.Code != 400 {
-		t.Fatal("accepted hour beyond forecast")
-	}
-	a.busy <- struct{}{}
-	busy := httptest.NewRecorder()
-	req = httptest.NewRequest("POST", "/refresh", nil)
-	req.Header.Set("HX-Request", "true")
-	handler.ServeHTTP(busy, req)
-	if busy.Code != 409 {
-		t.Fatal("allowed overlapping refresh")
+		t.Fatal("accepted invalid hour")
 	}
 }
-
-func TestRetriesAreBoundedAndCancellationStopsPublication(t *testing.T) {
+func TestRetriesBoundedAndCancellationPreventsPublication(t *testing.T) {
 	calls := 0
-	client := &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+	client := &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
 		calls++
 		resp := response(503, "")
 		resp.Header.Set("Retry-After", "0")
 		return resp, nil
 	})}
-	if _, err := fetchForecast(context.Background(), client, "https://example.test", Point{0, 0}); err == nil || calls != 3 {
+	provider := openmeteo.Client{HTTP: client, Endpoint: "https://example.test"}
+	if _, err := provider.Forecast(context.Background(), domain.Point{0, 0}); err == nil || calls != 3 {
 		t.Fatal("retry budget", calls, err)
 	}
 	calls = 0
-	client.Transport = transportFunc(func(r *http.Request) (*http.Response, error) { calls++; return response(429, ""), nil })
-	if _, err := fetchForecast(context.Background(), client, "https://example.test", Point{0, 0}); err == nil || calls != 1 {
-		t.Fatal("rate limit retried", calls, err)
+	client.Transport = transportFunc(func(*http.Request) (*http.Response, error) { calls++; return response(429, ""), nil })
+	if _, err := provider.Forecast(context.Background(), domain.Point{0, 0}); err == nil || calls != 1 {
+		t.Fatal("retried rate limit")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	valid := forecastJSON(t, false)
-	a := &app{file: filepath.Join(t.TempDir(), "snapshot.json"), endpoint: "https://example.test", client: &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) { cancel(); return response(200, valid), nil })}}
-	if err := a.collect(ctx, Route{}, []Point{{0, 0}}); err == nil || a.snapshot != nil {
+	path := filepath.Join(t.TempDir(), "snapshot.json")
+	service := newService(t, path, func(*http.Request) (*http.Response, error) { cancel(); return response(200, valid), nil })
+	if err := service.Import(ctx, "route.gpx", []byte(twoSegments)); !errors.Is(err, context.Canceled) {
+		t.Fatal("lost cancellation", err)
+	}
+	if service.Snapshot() != nil {
 		t.Fatal("published canceled request")
 	}
-	if _, err := os.Stat(a.file); !os.IsNotExist(err) {
-		t.Fatal("canceled request created publication")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("persisted canceled request")
 	}
 }
-
-func TestSamplingIsBoundedAndKeepsEachSegmentEndpoints(t *testing.T) {
-	var xml strings.Builder
-	xml.WriteString(`<gpx><trk>`)
-	for segment := 0; segment < 3; segment++ {
-		xml.WriteString(`<trkseg>`)
-		for i := 0; i < 100; i++ {
-			fmt.Fprintf(&xml, `<trkpt lat="%f" lon="%f"/>`, 45+float64(segment)+float64(i)/1000, -111.0)
+func TestPersistenceFailureAndConcurrentRefresh(t *testing.T) {
+	valid := forecastJSON(t, false)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snapshot.json")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	first := true
+	service := newService(t, path, func(*http.Request) (*http.Response, error) {
+		if first {
+			first = false
+			close(entered)
+			<-release
 		}
-		xml.WriteString(`</trkseg>`)
+		return response(200, valid), nil
+	})
+	done := make(chan error, 1)
+	go func() { done <- service.Import(context.Background(), "route.gpx", []byte(twoSegments)) }()
+	<-entered
+	if err := service.Refresh(context.Background()); !errors.Is(err, application.ErrBusy) {
+		t.Fatal("concurrent refresh was accepted", err)
 	}
-	xml.WriteString(`</trk></gpx>`)
-	route, points, err := parseRoute(strings.NewReader(xml.String()))
-	if err != nil {
+	close(release)
+	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if len(points) != 12 {
-		t.Fatal("sample budget", len(points))
+	old := service.Snapshot()
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
 	}
-	for i, segment := range route.Coordinates {
-		if points[i*4] != segment[0] || points[i*4+3] != segment[len(segment)-1] {
-			t.Fatal("lost segment endpoint")
-		}
+	// A directory at the destination makes atomic replacement fail after writing.
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestPersistenceFailureDoesNotPublish(t *testing.T) {
-	valid := forecastJSON(t, false)
-	old := &Snapshot{}
-	a := &app{snapshot: old, file: filepath.Join(t.TempDir(), "missing", "snapshot.json"), endpoint: "https://example.test", client: &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) { return response(200, valid), nil })}}
-	if err := a.collect(context.Background(), Route{}, []Point{{0, 0}}); err == nil || a.snapshot != old {
+	if err := service.Refresh(context.Background()); err == nil {
+		t.Fatal("ignored storage failure")
+	}
+	if !reflect.DeepEqual(old, service.Snapshot()) {
 		t.Fatal("published before persistence")
 	}
+	files, err := os.ReadDir(dir)
+	if err != nil || len(files) != 1 {
+		t.Fatal("temporary file left behind")
+	}
 }
-
+func TestStoredSnapshotValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "snapshot.json")
+	if err := os.WriteFile(path, []byte(`{"route":{"type":"MultiLineString","coordinates":[]},"forecasts":[]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (snapshotfile.Store{Path: path}).Load(context.Background()); err == nil {
+		t.Fatal("accepted broken snapshot")
+	}
+}
 func TestMapConfigExposesOnlyPublicTokens(t *testing.T) {
 	for _, token := range []string{"", "sk.test-secret", "pk.test-public"} {
-		a := &app{mapboxToken: token}
+		ui, err := httpui.New(nil, assets, token)
+		if err != nil {
+			t.Fatal(err)
+		}
 		recorder := httptest.NewRecorder()
-		a.routes().ServeHTTP(recorder, httptest.NewRequest("GET", "/api/map-config", nil))
+		ui.Routes().ServeHTTP(recorder, httptest.NewRequest("GET", "/api/map-config", nil))
 		if token == "pk.test-public" {
 			if recorder.Code != 200 || !strings.Contains(recorder.Body.String(), token) {
 				t.Fatal("public token unavailable")
 			}
-		} else {
-			if recorder.Code != 503 || strings.Contains(recorder.Body.String(), "sk.test-secret") {
-				t.Fatal("invalid token exposed")
-			}
+		} else if recorder.Code != 503 || strings.Contains(recorder.Body.String(), "sk.test-secret") {
+			t.Fatal("invalid token exposed")
 		}
 		if recorder.Header().Get("Cache-Control") != "no-store" {
-			t.Fatal("configuration should not be cached")
+			t.Fatal("config cached")
 		}
 	}
 }

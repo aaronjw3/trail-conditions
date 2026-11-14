@@ -1,30 +1,27 @@
-package main
+package httpui
 
 import (
 	"bytes"
 	"encoding/json"
-	"html/template"
 	"net/http"
 	"strconv"
 	"time"
-)
 
-var panelTemplate = template.Must(template.ParseFS(assets, "web/panel.html"))
+	"github.com/aaronjw3/trail-conditions/internal/domain"
+)
 
 type reading struct {
 	Index                            int
 	Temperature, Precipitation, Wind float64
-	Point                            Point
+	Point                            domain.Point
 }
 
-func (a *app) panel(w http.ResponseWriter, r *http.Request) {
-	a.mu.RLock()
-	snapshot := a.snapshot
-	a.mu.RUnlock()
+func (a *Handler) panel(w http.ResponseWriter, r *http.Request) {
+	snapshot := a.service.Snapshot()
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if snapshot == nil {
-		w.Write([]byte(`<p class="empty">Upload a GPX route or try the example to see its forecast.</p>`))
+		w.Write([]byte(`<p class="empty">Upload a GPX, KML, or KMZ route or try the example to see its forecast.</p>`))
 		return
 	}
 	hour, err := strconv.Atoi(r.URL.Query().Get("hour"))
@@ -49,9 +46,9 @@ func (a *app) panel(w http.ResponseWriter, r *http.Request) {
 		rows = append(rows, reading{i + 1, f.Temperature[hour], f.Precipitation[hour], f.Wind[hour], f.Point})
 	}
 	data, _ := json.Marshal(struct {
-		Snapshot *Snapshot `json:"snapshot"`
-		Hour     int       `json:"hour"`
-		Metric   string    `json:"metric"`
+		Snapshot *domain.Snapshot `json:"snapshot"`
+		Hour     int              `json:"hour"`
+		Metric   string           `json:"metric"`
 	}{snapshot, hour, metric})
 	view := struct {
 		Hour                          int
@@ -59,7 +56,7 @@ func (a *app) panel(w http.ResponseWriter, r *http.Request) {
 		Rows                          []reading
 	}{hour, metric, time.Unix(snapshot.Forecasts[0].Times[hour], 0).UTC().Format("Mon Jan 2 · 15:04 UTC"), snapshot.RetrievedAt.Format(time.RFC3339), string(data), rows}
 	var out bytes.Buffer
-	if err := panelTemplate.Execute(&out, view); err != nil {
+	if err := a.panelTemplate.Execute(&out, view); err != nil {
 		http.Error(w, "Could not render forecast.", 500)
 		return
 	}
