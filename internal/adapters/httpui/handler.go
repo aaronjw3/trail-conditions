@@ -115,7 +115,11 @@ func (a *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		slog.Error("refresh failed", "error", err)
-		http.Error(w, "Refresh failed. The previous complete forecast is unchanged. Check the server log and retry.", 502)
+		message := "Refresh failed. The previous complete forecast is unchanged. Check the server log and retry."
+		if errors.Is(err, application.ErrWeatherUnavailable) {
+			message = "Could not retrieve weather from Open-Meteo. The route and forecast were not updated. Your previous complete forecast is unchanged. Try again shortly."
+		}
+		http.Error(w, message, http.StatusBadGateway)
 		return
 	}
 	a.panel(w, r)

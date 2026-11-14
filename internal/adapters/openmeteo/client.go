@@ -3,11 +3,14 @@ package openmeteo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/aaronjw3/trail-conditions/internal/domain"
@@ -41,31 +44,40 @@ func (c Client) Forecast(ctx context.Context, point domain.Point) (domain.Foreca
 			return domain.Forecast{}, err
 		}
 		req.Header.Set("User-Agent", "trail-conditions/1.0")
+		wait := time.Duration(attempt+1) * time.Second
 		resp, err := client.Do(req)
 		if err != nil {
-			return domain.Forecast{}, fmt.Errorf("forecast connection failed: %w", err)
-		}
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
-		resp.Body.Close()
-		if readErr != nil || len(body) > 1<<20 {
-			return domain.Forecast{}, fmt.Errorf("forecast response interrupted or too large")
-		}
-		if resp.StatusCode == 200 {
-			if json.Unmarshal(body, &raw) != nil {
-				return domain.Forecast{}, fmt.Errorf("invalid forecast JSON")
+			if ctx.Err() != nil {
+				return domain.Forecast{}, ctx.Err()
 			}
-			break
-		}
-		if attempt == 2 || (resp.StatusCode != 502 && resp.StatusCode != 503 && resp.StatusCode != 504) {
-			return domain.Forecast{}, fmt.Errorf("forecast provider returned HTTP %d", resp.StatusCode)
-		}
-		wait := time.Duration(attempt+1) * time.Second
-		if h := resp.Header.Get("Retry-After"); h != "" {
-			n, e := strconv.Atoi(h)
-			if e != nil || n < 0 || n > 5 {
-				return domain.Forecast{}, fmt.Errorf("provider requests delayed retry; try again later")
+			var networkError net.Error
+			retryable := (errors.As(err, &networkError) && networkError.Timeout()) ||
+				errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET)
+			if attempt == 2 || !retryable {
+				return domain.Forecast{}, fmt.Errorf("forecast connection failed: %w", err)
 			}
-			wait = time.Duration(n) * time.Second
+		} else {
+			body, readErr := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+			resp.Body.Close()
+			if readErr != nil || len(body) > 1<<20 {
+				return domain.Forecast{}, fmt.Errorf("forecast response interrupted or too large")
+			}
+			if resp.StatusCode == 200 {
+				if json.Unmarshal(body, &raw) != nil {
+					return domain.Forecast{}, fmt.Errorf("invalid forecast JSON")
+				}
+				break
+			}
+			if attempt == 2 || (resp.StatusCode != 502 && resp.StatusCode != 503 && resp.StatusCode != 504) {
+				return domain.Forecast{}, fmt.Errorf("forecast provider returned HTTP %d", resp.StatusCode)
+			}
+			if h := resp.Header.Get("Retry-After"); h != "" {
+				n, e := strconv.Atoi(h)
+				if e != nil || n < 0 || n > 5 {
+					return domain.Forecast{}, fmt.Errorf("provider requests delayed retry; try again later")
+				}
+				wait = time.Duration(n) * time.Second
+			}
 		}
 		timer := time.NewTimer(wait)
 		select {
