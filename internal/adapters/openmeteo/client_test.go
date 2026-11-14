@@ -1,23 +1,92 @@
-package main
+package openmeteo_test
 
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"reflect"
 	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
-	"github.com/aaronjw3/trail-conditions/internal/adapters/httpui"
 	"github.com/aaronjw3/trail-conditions/internal/adapters/openmeteo"
 	"github.com/aaronjw3/trail-conditions/internal/domain"
 )
 
+type transportFunc func(*http.Request) (*http.Response, error)
+
+func (f transportFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+func response(code int, body string) *http.Response {
+	return &http.Response{StatusCode: code, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
+}
+func forecastJSON(t *testing.T, missing bool) string {
+	t.Helper()
+	times := make([]int64, 72)
+	temp := make([]any, 72)
+	rain := make([]float64, 72)
+	wind := make([]float64, 72)
+	for i := range times {
+		times[i] = 1800000000 + int64(i)*3600
+		temp[i] = 12.5
+		rain[i] = 0.2
+		wind[i] = 15
+	}
+	if missing {
+		temp[10] = nil
+	}
+	body, err := json.Marshal(map[string]any{"hourly_units": map[string]string{"time": "unixtime", "temperature_2m": "°C", "precipitation": "mm", "wind_speed_10m": "km/h"}, "hourly": map[string]any{"time": times, "temperature_2m": temp, "precipitation": rain, "wind_speed_10m": wind}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
+func TestForecastRejectsMissingValuesUnitsAndTimeGaps(t *testing.T) {
+	valid := forecastJSON(t, false)
+	for name, body := range map[string]string{"valid": valid, "null": forecastJSON(t, true), "units": strings.Replace(valid, "km/h", "mph", 1), "time gap": strings.Replace(valid, "1800003600", "1800003601", 1), "truncated": valid[:len(valid)-4]} {
+		t.Run(name, func(t *testing.T) {
+			client := &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Query().Get("timezone") != "GMT" || r.URL.Query().Get("forecast_days") != "3" {
+					t.Error("forecast contract missing")
+				}
+				return response(200, body), nil
+			})}
+			result, err := (openmeteo.Client{HTTP: client, Endpoint: "https://example.test"}).Forecast(context.Background(), domain.Point{-111, 45})
+			if name == "valid" {
+				if err != nil || len(result.Times) != 72 {
+					t.Fatalf("%+v %v", result, err)
+				}
+			} else if err == nil {
+				t.Fatal("accepted invalid provider data")
+			}
+		})
+	}
+}
+
+// Every database test owns a disposable schema in the explicitly supplied test DB.
+func TestProviderRetriesAreBounded(t *testing.T) {
+	calls := 0
+	client := &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		resp := response(503, "")
+		resp.Header.Set("Retry-After", "0")
+		return resp, nil
+	})}
+	provider := openmeteo.Client{HTTP: client, Endpoint: "https://example.test"}
+	if _, err := provider.Forecast(context.Background(), domain.Point{0, 0}); err == nil || calls != 3 {
+		t.Fatal("retry budget", calls, err)
+	}
+	calls = 0
+	client.Transport = transportFunc(func(*http.Request) (*http.Response, error) { calls++; return response(429, ""), nil })
+	if _, err := provider.Forecast(context.Background(), domain.Point{0, 0}); err == nil || calls != 1 {
+		t.Fatal("retried rate limit")
+	}
+}
 func TestForecastConnectionRetryBudget(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -56,7 +125,6 @@ func TestForecastConnectionRetryBudget(t *testing.T) {
 		})
 	}
 }
-
 func TestForecastCancellationDuringConnectionRetry(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -73,7 +141,6 @@ func TestForecastCancellationDuringConnectionRetry(t *testing.T) {
 		}
 	})
 }
-
 func TestForecastRetriesClosedTLSConnection(t *testing.T) {
 	valid := forecastJSON(t, false)
 	calls := 0
@@ -96,35 +163,5 @@ func TestForecastRetriesClosedTLSConnection(t *testing.T) {
 	result, err := provider.Forecast(context.Background(), domain.Point{-111, 45})
 	if err != nil || len(result.Times) != 72 || calls != 2 {
 		t.Fatalf("calls=%d err=%v", calls, err)
-	}
-}
-
-func TestWeatherFailureExplainsUploadAndPreservesSnapshot(t *testing.T) {
-	fail := false
-	service, store, _ := newService(t, func(*http.Request) (*http.Response, error) {
-		if fail {
-			return nil, errors.New("private diagnostic detail")
-		}
-		return response(200, forecastJSON(t, false)), nil
-	})
-	if err := service.Import(context.Background(), "route.gpx", []byte(twoSegments)); err != nil {
-		t.Fatal(err)
-	}
-	before := service.Snapshot()
-	fail = true
-	ui, err := httpui.New(service, assets, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := httptest.NewRequest(http.MethodPost, "/example", nil)
-	request.Header.Set("HX-Request", "true")
-	recorder := httptest.NewRecorder()
-	ui.Routes().ServeHTTP(recorder, request)
-	if recorder.Code != 502 || !strings.Contains(recorder.Body.String(), "Open-Meteo") || strings.Contains(recorder.Body.String(), "private diagnostic detail") {
-		t.Fatalf("unexpected response: %d %s", recorder.Code, recorder.Body.String())
-	}
-	stored, err := store.Load(context.Background())
-	if err != nil || !reflect.DeepEqual(before, stored) || !reflect.DeepEqual(before, service.Snapshot()) {
-		t.Fatalf("failed weather request changed snapshot: %v", err)
 	}
 }

@@ -34,7 +34,7 @@ test('style changes restore route and selected forecast without resetting the vi
     window: {mapboxgl}, mapboxgl,
     fetch: async () => ({ok: true, json: async () => ({token: 'pk.test'})})
   };
-  const code = fs.readFileSync(`${__dirname}/web/app.js`, 'utf8');
+  const code = fs.readFileSync(`${__dirname}/../../web/app.js`, 'utf8');
   await vm.runInNewContext(`(async () => {${code}\n})()`, context);
   instance.events['style.load']();
   assert.equal(instance.fits, 1);

@@ -160,21 +160,29 @@ Ordinary PostgreSQL suffices because the app reads and replaces whole snapshots.
 
 ## Tests
 
-Start the local database, then run the full suite:
+Tests are organized by scope:
+
+- `internal/adapters/*/*_test.go`: adapter tests beside the implementation, runnable without PostgreSQL or external API access.
+- `tests/integration/`: application, HTTP upload, and PostgreSQL workflows, selected with the `integration` build tag.
+- `tests/web/`: JavaScript map behavior tests.
+
+Run the database-free tests with `go test -race ./...` and `node --test tests/web/*.test.cjs`.
+
+Start the local database, then run all Go tests, including integration tests:
 
 ```sh
 set -a
 source .env
 set +a
 docker compose up -d --wait db
-go test -race -coverpkg=./... -coverprofile=coverage.out ./...
+go test -race -count=1 -tags=integration -coverpkg=./... -coverprofile=coverage.out ./...
 go tool cover -func=coverage.out
-go vet ./...
+go vet -tags=integration ./...
 go build ./...
 node --check --input-type=module < web/app.js
-node --test map.test.cjs
+node --test tests/web/*.test.cjs
 ```
 
-Database tests create uniquely named temporary schemas and drop them afterward. They require schema-creation permission and do not alter the application's `public.current_snapshot`. They verify initial creation, upserts, reloads, failed-statement preservation, invalid stored data, cancellation, concurrent refresh exclusion, and GPX/KML/KMZ uploads through the HTTP handler to stored and rendered snapshots. Without `TEST_DATABASE_URL`, those integration tests explicitly skip; importer, provider-response, and map-configuration tests still run. CI supplies PostgreSQL so database tests run there.
+Database tests create uniquely named temporary schemas and drop them afterward. They require schema-creation permission and do not alter the application's `public.current_snapshot`. They verify initial creation, upserts, reloads, failed-statement preservation, invalid stored data, cancellation, concurrent refresh exclusion, and GPX/KML/KMZ uploads through the HTTP handler to stored and rendered snapshots. Integration tests fail if `TEST_DATABASE_URL` is missing. CI runs the database-free suite and then the full suite with PostgreSQL.
 
-HTTP handlers use `httptest` recorders and provider responses use a controlled HTTP transport. PostgreSQL is real in database tests. These tests do not establish live Open-Meteo compatibility, DNS/TLS behavior, browser interactions, or forecast accuracy. The JavaScript regression test uses controlled DOM and Mapbox boundaries to verify layer restoration after changing basemaps; it does not test WebGL rendering.
+HTTP handlers use `httptest` recorders and provider responses use a controlled HTTP transport. PostgreSQL is real in database tests. A local TLS test server also verifies recovery from a dropped connection. These tests do not establish live Open-Meteo compatibility, external DNS/TLS connectivity, browser interactions, or forecast accuracy. The JavaScript regression test uses controlled DOM and Mapbox boundaries to verify layer restoration after changing basemaps; it does not test WebGL rendering.
