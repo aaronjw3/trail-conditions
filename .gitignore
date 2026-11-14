@@ -1,0 +1,5 @@
+/data/
+/trail-conditions
+coverage.out
+.env
+.DS_Store

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Trail Conditions" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata><name>Synthetic Bozeman foothills example — not a navigable trail</name></metadata>
+  <trk><name>Illustrative foothills route</name><trkseg>
+    <trkpt lat="45.706" lon="-110.982"/>
+    <trkpt lat="45.711" lon="-110.977"/>
+    <trkpt lat="45.716" lon="-110.970"/>
+    <trkpt lat="45.720" lon="-110.963"/>
+    <trkpt lat="45.725" lon="-110.954"/>
+    <trkpt lat="45.730" lon="-110.948"/>
+  </trkseg></trk>
+</gpx>
