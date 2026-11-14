@@ -123,7 +123,7 @@ HTMX reduces application-authored request and DOM-update code; it does not elimi
 
 - One refresh at a time; overlapping writes return HTTP 409.
 - Total collection deadline: 90 seconds. Per-request timeout: 15 seconds.
-- HTTP 502/503/504 get at most three attempts, with bounded waits. A numeric `Retry-After` up to five seconds is honored. Other statuses, including 429, fail for an explicit later retry. Transport failures are not automatically retried.
+- HTTP 502/503/504 get at most three attempts, with bounded waits. A numeric `Retry-After` up to five seconds is honored. Other statuses, including 429, fail for an explicit later retry. Connection timeouts (including TLS handshakes), connection resets, and connections closed before a response share the same three-attempt budget, with one- and two-second waits. Cancellation stops retries; certificate errors and other permanent connection failures are not retried. Persistent weather failures leave the previous complete route and forecast unchanged.
 - Provider responses are limited to 1 MiB. Redirects are rejected.
 - Forecast retrieval is sequential and bounded to 12 locations. This is a small local tool, not a distributed job system.
 - Failed uploads or refreshes do not replace the displayed forecast. Its retrieval timestamp remains visible; stored forecasts are not automatically refreshed.

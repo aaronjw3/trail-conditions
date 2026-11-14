@@ -23,6 +23,8 @@ type SnapshotStore interface {
 	Save(context.Context, *domain.Snapshot) error
 }
 
+var ErrWeatherUnavailable = errors.New("weather service unavailable")
+
 var ErrBusy = errors.New("a forecast request is already running")
 
 type InputError struct{ Err error }
@@ -113,7 +115,7 @@ func (s *Service) collect(ctx context.Context, route domain.Route) error {
 		}
 		forecast, err := s.weather.Forecast(ctx, point)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: %w", ErrWeatherUnavailable, err)
 		}
 		next.Forecasts = append(next.Forecasts, forecast)
 	}
