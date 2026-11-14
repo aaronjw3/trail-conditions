@@ -23,6 +23,17 @@ Compose starts two services:
 - `app`: the Go application, published at `127.0.0.1:8080`.
 - `db`: PostgreSQL 18, published at `127.0.0.1:5433` for local development. The app reaches it at `db:5432` on the Compose network.
 
+Set `TRAIL_DB_PORT` to choose another host database port:
+
+```sh
+export TRAIL_DB_PORT=55432
+docker compose up -d --wait db
+export DATABASE_URL="postgres://trail:trail_local@127.0.0.1:${TRAIL_DB_PORT}/trail?sslmode=disable"
+export TEST_DATABASE_URL="$DATABASE_URL"
+```
+
+Keep that variable exported for subsequent Compose commands, or save it in your local `.env`. The app container always connects to `db:5432`; this setting only changes access from the host. Native execution and tests must use the selected host port.
+
 The app starts after PostgreSQL passes its readiness check. It creates its `current_snapshot` table before serving requests. PostgreSQL stores data in the named `postgres-data` volume, mounted at `/var/lib/postgresql`. Stop with Ctrl+C, then `docker compose down` to remove containers and the network; the volume remains. `docker compose up` reloads the stored snapshot. Stop an existing native or standalone-container copy first to free port 8080.
 
 Compose uses the local-development database credentials `trail` / `trail_local`. The services are published only on loopback. This remains a single-user demonstration, not an authenticated public deployment. Run one app instance per database: its active snapshot and refresh lock are process-local.
