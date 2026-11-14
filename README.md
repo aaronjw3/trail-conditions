@@ -6,33 +6,28 @@ An independent portfolio project demonstrating Go integration with the [Open-Met
 
 ## Run with Docker Compose
 
-Requires Docker Desktop or Docker Engine with Compose. The app uses Mapbox for its map and Open-Meteo for forecasts. Set your public Mapbox token in your terminal; no weather API key is needed.
+Requires Docker Desktop or Docker Engine with Compose. Copy the tracked configuration example once:
 
-In zsh, enter the token at a hidden prompt:
+```sh
+cp .env.example .env
+```
 
-```zsh
-read -r -s 'MAPBOX_PUBLIC_TOKEN?Paste your public Mapbox token, then press Enter: '
-export MAPBOX_PUBLIC_TOKEN
+Edit `.env` in your editor and set `MAPBOX_PUBLIC_TOKEN` to your public `pk.` token. The example selects host database port `55432`; change `TRAIL_DB_PORT` if needed. No weather API key is required. Keep the populated `.env` local; Git ignores it.
+
+```sh
 docker compose up --build
 ```
+
+Compose reads `.env` automatically. Already-exported shell variables take precedence over `.env`; if you previously exported different settings, reload the file with `set -a; source .env; set +a` before running Compose.
 
 Open **http://127.0.0.1:8080**. Upload a GPX, KML, or KMZ route or select **Try the foothills example**. The example is synthetic geometry near Bozeman, not a navigable trail. Selecting an hour or map color uses the current snapshot; only uploads and explicit refreshes request new weather.
 
 Compose starts two services:
 
 - `app`: the Go application, published at `127.0.0.1:8080`.
-- `db`: PostgreSQL 18, published at `127.0.0.1:5433` for local development. The app reaches it at `db:5432` on the Compose network.
+- `db`: PostgreSQL 18, published on `127.0.0.1:${TRAIL_DB_PORT}` for local development (`55432` in `.env.example`; `5433` if no setting is provided). The app reaches it at `db:5432` on the Compose network.
 
-Set `TRAIL_DB_PORT` to choose another host database port:
-
-```sh
-export TRAIL_DB_PORT=55432
-docker compose up -d --wait db
-export DATABASE_URL="postgres://trail:trail_local@127.0.0.1:${TRAIL_DB_PORT}/trail?sslmode=disable"
-export TEST_DATABASE_URL="$DATABASE_URL"
-```
-
-Keep that variable exported for subsequent Compose commands, or save it in your local `.env`. The app container always connects to `db:5432`; this setting only changes access from the host. Native execution and tests must use the selected host port.
+The app container connects to `db:5432` regardless of the host port. `DATABASE_URL` and `TEST_DATABASE_URL` in the example derive their host port from `TRAIL_DB_PORT`; they are for native Go and host-run tests. Compose supplies the app container's database URL separately.
 
 The app starts after PostgreSQL passes its readiness check. It creates its `current_snapshot` table before serving requests. PostgreSQL stores data in the named `postgres-data` volume, mounted at `/var/lib/postgresql`. Stop with Ctrl+C, then `docker compose down` to remove containers and the network; the volume remains. `docker compose up` reloads the stored snapshot. Stop an existing native or standalone-container copy first to free port 8080.
 
@@ -51,7 +46,7 @@ docker compose exec db psql -U trail -d trail -c \
 
 Use a public `pk.` Mapbox token, never a secret `sk.` token. The server exposes the public token through `/api/map-config` because Mapbox runs in the browser. Configure token URL restrictions to include `http://127.0.0.1:8080` for local use. The map has Satellite and Streets options.
 
-For persistence across terminal sessions, save `export MAPBOX_PUBLIC_TOKEN='your-public-token'` in the project's ignored `.env` file using your editor. Run `source .env` before starting the app. Never commit the file. Native Go execution does not automatically load `.env`.
+The `.env.example` includes every setting used for local development. Native Go execution and `go test` do not automatically read `.env`; load it into the environment as shown below. The example contains only a blank token and documented local database credentials.
 
 The browser loads pinned HTMX and Mapbox versions from CDNs. Mapbox receives map requests for the viewed area. Open-Meteo receives sampled coordinates, not the original uploaded file. The normalized route remains in PostgreSQL until replaced. Forecasts represent modeled conditions at sampled locations, not precise conditions throughout a mountain route. Open-Meteo's free API is for noncommercial use under its [terms](https://open-meteo.com/en/terms).
 
@@ -60,9 +55,10 @@ The browser loads pinned HTMX and Mapbox versions from CDNs. Mapbox receives map
 Requires Go 1.25 or later:
 
 ```sh
+set -a
+source .env
+set +a
 docker compose up -d --wait db
-export DATABASE_URL='postgres://trail:trail_local@127.0.0.1:5433/trail?sslmode=disable'
-# Export MAPBOX_PUBLIC_TOKEN as described above.
 go run .
 ```
 
@@ -167,8 +163,10 @@ Ordinary PostgreSQL suffices because the app reads and replaces whole snapshots.
 Start the local database, then run the full suite:
 
 ```sh
+set -a
+source .env
+set +a
 docker compose up -d --wait db
-export TEST_DATABASE_URL='postgres://trail:trail_local@127.0.0.1:5433/trail?sslmode=disable'
 go test -race -coverpkg=./... -coverprofile=coverage.out ./...
 go tool cover -func=coverage.out
 go vet ./...
