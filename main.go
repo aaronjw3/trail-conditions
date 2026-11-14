@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -16,26 +15,43 @@ import (
 	"github.com/aaronjw3/trail-conditions/internal/adapters/geoimport"
 	"github.com/aaronjw3/trail-conditions/internal/adapters/httpui"
 	"github.com/aaronjw3/trail-conditions/internal/adapters/openmeteo"
-	"github.com/aaronjw3/trail-conditions/internal/adapters/snapshotfile"
+	"github.com/aaronjw3/trail-conditions/internal/adapters/postgres"
 	"github.com/aaronjw3/trail-conditions/internal/application"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 //go:embed web/* examples/*
 var assets embed.FS
 
 func main() {
-	dir := os.Getenv("TRAIL_DATA_DIR")
-	if dir == "" {
-		dir = "data"
+
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		slog.Error("DATABASE_URL is required; use docker compose up --build or configure PostgreSQL")
+		os.Exit(1)
 	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		slog.Error("create data directory", "error", err)
+	startup, cancelStartup := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancelStartup()
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		slog.Error("invalid DATABASE_URL")
+		os.Exit(1)
+	}
+	config.MaxConns = 4
+	pool, err := pgxpool.NewWithConfig(startup, config)
+	if err != nil {
+		slog.Error("initialize PostgreSQL pool")
+		os.Exit(1)
+	}
+	defer pool.Close()
+	store, err := postgres.New(startup, pool)
+	if err != nil {
+		slog.Error("initialize snapshot database", "error", err)
 		os.Exit(1)
 	}
 
 	weather := openmeteo.Client{HTTP: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, Endpoint: "https://api.open-meteo.com/v1/forecast"}
-	store := snapshotfile.Store{Path: filepath.Join(dir, "snapshot.json")}
-	service, err := application.New(context.Background(), geoimport.Decoder{}, weather, store)
+	service, err := application.New(startup, geoimport.Decoder{}, weather, store)
 	if err != nil {
 		slog.Error("initialize application", "error", err)
 		os.Exit(1)

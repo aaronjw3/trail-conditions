@@ -117,7 +117,7 @@ func (s *Service) collect(ctx context.Context, route domain.Route) error {
 		}
 		next.Forecasts = append(next.Forecasts, forecast)
 	}
-	next.RetrievedAt = time.Now().UTC()
+	next.RetrievedAt = time.Now().UTC().Truncate(time.Microsecond)
 	if err := next.Validate(); err != nil {
 		return err
 	}

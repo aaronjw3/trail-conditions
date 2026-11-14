@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"html"
@@ -12,7 +13,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -20,9 +20,11 @@ import (
 	"github.com/aaronjw3/trail-conditions/internal/adapters/geoimport"
 	"github.com/aaronjw3/trail-conditions/internal/adapters/httpui"
 	"github.com/aaronjw3/trail-conditions/internal/adapters/openmeteo"
-	"github.com/aaronjw3/trail-conditions/internal/adapters/snapshotfile"
+	"github.com/aaronjw3/trail-conditions/internal/adapters/postgres"
 	"github.com/aaronjw3/trail-conditions/internal/application"
 	"github.com/aaronjw3/trail-conditions/internal/domain"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const twoSegments = `<gpx><trk><trkseg><trkpt lat="45" lon="-111"/><trkpt lat="45.1" lon="-111.1"/></trkseg><trkseg><trkpt lat="46" lon="-112"/><trkpt lat="46.1" lon="-112.1"/></trkseg></trk></gpx>`
@@ -79,19 +81,59 @@ func TestForecastRejectsMissingValuesUnitsAndTimeGaps(t *testing.T) {
 	}
 }
 
-func newService(t *testing.T, path string, transport transportFunc) *application.Service {
+// Every database test owns a disposable schema in the explicitly supplied test DB.
+func testDatabase(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	service, err := application.New(context.Background(), geoimport.Decoder{}, openmeteo.Client{HTTP: &http.Client{Transport: transport}, Endpoint: "https://example.test"}, snapshotfile.Store{Path: path})
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set TEST_DATABASE_URL to run PostgreSQL integration tests")
+	}
+	ctx := context.Background()
+	admin, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return service
+	schema := "trail_test_" + strings.ToLower(rand.Text())
+	name := pgx.Identifier{schema}.Sanitize()
+	if _, err = admin.Exec(ctx, "CREATE SCHEMA "+name); err != nil {
+		admin.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := admin.Exec(context.Background(), "DROP SCHEMA "+name+" CASCADE"); err != nil {
+			t.Error(err)
+		}
+		admin.Close()
+	})
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ConnConfig.RuntimeParams["search_path"] = schema
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+func newService(t *testing.T, transport transportFunc) (*application.Service, *postgres.Store, *pgxpool.Pool) {
+	t.Helper()
+	pool := testDatabase(t)
+	store, err := postgres.New(context.Background(), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := application.New(context.Background(), geoimport.Decoder{}, openmeteo.Client{HTTP: &http.Client{Transport: transport}, Endpoint: "https://example.test"}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service, store, pool
 }
 func TestFailedRefreshPreservesPublishedSnapshotAndReloads(t *testing.T) {
 	valid := forecastJSON(t, false)
 	calls := 0
 	fail := false
-	path := filepath.Join(t.TempDir(), "snapshot.json")
 	transport := transportFunc(func(*http.Request) (*http.Response, error) {
 		calls++
 		if fail && calls%2 == 0 {
@@ -99,27 +141,31 @@ func TestFailedRefreshPreservesPublishedSnapshotAndReloads(t *testing.T) {
 		}
 		return response(200, valid), nil
 	})
-	service := newService(t, path, transport)
+	service, store, pool := newService(t, transport)
 	if err := service.Import(context.Background(), "route.gpx", []byte(twoSegments)); err != nil {
 		t.Fatal(err)
 	}
 	old := service.Snapshot()
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
 	fail = true
 	if err := service.Refresh(context.Background()); err == nil {
 		t.Fatal("published partial result")
 	}
-	after, err := os.ReadFile(path)
+	stored, err := store.Load(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(old, service.Snapshot()) || !bytes.Equal(before, after) {
+	if !reflect.DeepEqual(old, service.Snapshot()) || !reflect.DeepEqual(old, stored) {
 		t.Fatal("failed refresh changed snapshot")
 	}
-	reloaded := newService(t, path, transport)
+	// Reopen the adapter and application to exercise loading an existing table.
+	reopened, err := postgres.New(context.Background(), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := application.New(context.Background(), geoimport.Decoder{}, openmeteo.Client{}, reopened)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !reflect.DeepEqual(old, reloaded.Snapshot()) {
 		t.Fatal("restart lost snapshot")
 	}
@@ -132,7 +178,7 @@ func TestFailedRefreshPreservesPublishedSnapshotAndReloads(t *testing.T) {
 }
 func TestHTTPUploadsRenderHTMLForAllFormats(t *testing.T) {
 	valid := forecastJSON(t, false)
-	service := newService(t, filepath.Join(t.TempDir(), "snapshot.json"), func(*http.Request) (*http.Response, error) { return response(200, valid), nil })
+	service, _, _ := newService(t, func(*http.Request) (*http.Response, error) { return response(200, valid), nil })
 	ui, err := httpui.New(service, assets, "")
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +233,7 @@ func TestHTTPUploadsRenderHTMLForAllFormats(t *testing.T) {
 		t.Fatal("accepted invalid hour")
 	}
 }
-func TestRetriesBoundedAndCancellationPreventsPublication(t *testing.T) {
+func TestProviderRetriesAreBounded(t *testing.T) {
 	calls := 0
 	client := &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
 		calls++
@@ -204,28 +250,29 @@ func TestRetriesBoundedAndCancellationPreventsPublication(t *testing.T) {
 	if _, err := provider.Forecast(context.Background(), domain.Point{0, 0}); err == nil || calls != 1 {
 		t.Fatal("retried rate limit")
 	}
+}
+
+func TestCancellationPreventsPublication(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	valid := forecastJSON(t, false)
-	path := filepath.Join(t.TempDir(), "snapshot.json")
-	service := newService(t, path, func(*http.Request) (*http.Response, error) { cancel(); return response(200, valid), nil })
+	service, store, _ := newService(t, func(*http.Request) (*http.Response, error) { cancel(); return response(200, valid), nil })
 	if err := service.Import(ctx, "route.gpx", []byte(twoSegments)); !errors.Is(err, context.Canceled) {
 		t.Fatal("lost cancellation", err)
 	}
 	if service.Snapshot() != nil {
 		t.Fatal("published canceled request")
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatal("persisted canceled request")
+	if stored, err := store.Load(context.Background()); err != nil || stored != nil {
+		t.Fatal("persisted canceled request", err)
 	}
 }
+
 func TestPersistenceFailureAndConcurrentRefresh(t *testing.T) {
 	valid := forecastJSON(t, false)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "snapshot.json")
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	first := true
-	service := newService(t, path, func(*http.Request) (*http.Response, error) {
+	service, store, pool := newService(t, func(*http.Request) (*http.Response, error) {
 		if first {
 			first = false
 			close(entered)
@@ -244,31 +291,32 @@ func TestPersistenceFailureAndConcurrentRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := service.Snapshot()
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	// A directory at the destination makes atomic replacement fail after writing.
-	if err := os.Mkdir(path, 0700); err != nil {
+	// A real database constraint rejects the replacement while preserving the row.
+	if _, err := pool.Exec(context.Background(), `ALTER TABLE current_snapshot ADD CONSTRAINT reject_refresh CHECK (false) NOT VALID`); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.Refresh(context.Background()); err == nil {
-		t.Fatal("ignored storage failure")
+		t.Fatal("ignored database failure")
 	}
-	if !reflect.DeepEqual(old, service.Snapshot()) {
-		t.Fatal("published before persistence")
+	stored, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
 	}
-	files, err := os.ReadDir(dir)
-	if err != nil || len(files) != 1 {
-		t.Fatal("temporary file left behind")
+	if !reflect.DeepEqual(old, service.Snapshot()) || !reflect.DeepEqual(old, stored) {
+		t.Fatal("failed statement replaced publication")
 	}
 }
 func TestStoredSnapshotValidation(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "snapshot.json")
-	if err := os.WriteFile(path, []byte(`{"route":{"type":"MultiLineString","coordinates":[]},"forecasts":[]}`), 0600); err != nil {
+	pool := testDatabase(t)
+	store, err := postgres.New(context.Background(), pool)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := (snapshotfile.Store{Path: path}).Load(context.Background()); err == nil {
-		t.Fatal("accepted broken snapshot")
+	if _, err = pool.Exec(context.Background(), `INSERT INTO current_snapshot (retrieved_at,route,forecasts) VALUES (now(),'{"type":"MultiLineString","coordinates":[]}','[]')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Load(context.Background()); err == nil {
+		t.Fatal("accepted broken stored snapshot")
 	}
 }
 func TestMapConfigExposesOnlyPublicTokens(t *testing.T) {
@@ -313,8 +361,7 @@ func TestKMZUploadPublishesGeometryAndMapPayload(t *testing.T) {
 	}
 	valid := forecastJSON(t, false)
 	var requested []string
-	path := filepath.Join(t.TempDir(), "snapshot.json")
-	service := newService(t, path, func(req *http.Request) (*http.Response, error) {
+	service, store, pool := newService(t, func(req *http.Request) (*http.Response, error) {
 		requested = append(requested, req.URL.Query().Get("longitude")+","+req.URL.Query().Get("latitude"))
 		return response(200, valid), nil
 	})
@@ -351,7 +398,7 @@ func TestKMZUploadPublishesGeometryAndMapPayload(t *testing.T) {
 	if len(requested) != 4 || requested[0] != "-121.735000,46.785000" || requested[3] != "-121.720000,46.805000" {
 		t.Fatal("wrong forecast locations", requested)
 	}
-	stored, err := (snapshotfile.Store{Path: path}).Load(context.Background())
+	stored, err := store.Load(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,11 +422,8 @@ func TestKMZUploadPublishesGeometryAndMapPayload(t *testing.T) {
 	if !reflect.DeepEqual(view.Snapshot, stored) || view.Hour < 0 || view.Hour >= 72 || view.Metric != "temperature" {
 		t.Fatal("map received a different snapshot")
 	}
-	files, err := os.ReadDir(filepath.Dir(path))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(files) != 1 || files[0].Name() != "snapshot.json" {
-		t.Fatal("archive members were extracted or temporary files retained")
+	var count int
+	if err := pool.QueryRow(context.Background(), "SELECT count(*) FROM current_snapshot").Scan(&count); err != nil || count != 1 {
+		t.Fatal("expected one complete snapshot row", count, err)
 	}
 }

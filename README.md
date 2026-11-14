@@ -4,53 +4,58 @@ Explore hourly weather forecasts along a GPX, KML, or KMZ route. Upload a hiking
 
 An independent portfolio project demonstrating Go integration with the [Open-Meteo forecast API](https://open-meteo.com/en/docs), route-format normalization into GeoJSON, complete snapshot publication, and a server-rendered HTMX interface. Contains no employer code, schemas, or data.
 
-## Run
+## Run with Docker Compose
 
-Requires Go 1.25 or later and internet access. A Mapbox public token is required for the map. Open-Meteo needs no API key. No database or npm build is required. Docker is an alternative to installing Go.
+Requires Docker Desktop or Docker Engine with Compose. The app uses Mapbox for its map and Open-Meteo for forecasts. Set your public Mapbox token in your terminal; no weather API key is needed.
 
-In zsh, enter the token at a hidden prompt (it will not enter shell history):
+In zsh, enter the token at a hidden prompt:
 
 ```zsh
 read -r -s 'MAPBOX_PUBLIC_TOKEN?Paste your public Mapbox token, then press Enter: '
 export MAPBOX_PUBLIC_TOKEN
+docker compose up --build
+```
+
+Open **http://127.0.0.1:8080**. Upload a GPX, KML, or KMZ route or select **Try the foothills example**. The example is synthetic geometry near Bozeman, not a navigable trail. Selecting an hour or map color uses the current snapshot; only uploads and explicit refreshes request new weather.
+
+Compose starts two services:
+
+- `app`: the Go application, published at `127.0.0.1:8080`.
+- `db`: PostgreSQL 18, published at `127.0.0.1:5433` for local development. The app reaches it at `db:5432` on the Compose network.
+
+The app starts after PostgreSQL passes its readiness check. It creates its `current_snapshot` table before serving requests. PostgreSQL stores data in the named `postgres-data` volume, mounted at `/var/lib/postgresql`. Stop with Ctrl+C, then `docker compose down` to remove containers and the network; the volume remains. `docker compose up` reloads the stored snapshot. Stop an existing native or standalone-container copy first to free port 8080.
+
+Compose uses the local-development database credentials `trail` / `trail_local`. The services are published only on loopback. This remains a single-user demonstration, not an authenticated public deployment. Run one app instance per database: its active snapshot and refresh lock are process-local.
+
+The image uses a Go build stage and a non-root distroless runtime. Templates and browser assets are embedded in the binary. The runtime contains CA certificates for outbound HTTPS but no shell or Go compiler. `.env` files and local data are excluded from the build context. Tokens are passed at runtime, not during image creation.
+
+To inspect the stored row:
+
+```sh
+docker compose exec db psql -U trail -d trail -c \
+  'SELECT retrieved_at, jsonb_array_length(forecasts) AS sample_count FROM current_snapshot;'
+```
+
+### Token configuration
+
+Use a public `pk.` Mapbox token, never a secret `sk.` token. The server exposes the public token through `/api/map-config` because Mapbox runs in the browser. Configure token URL restrictions to include `http://127.0.0.1:8080` for local use. The map has Satellite and Streets options.
+
+For persistence across terminal sessions, save `export MAPBOX_PUBLIC_TOKEN='your-public-token'` in the project's ignored `.env` file using your editor. Run `source .env` before starting the app. Never commit the file. Native Go execution does not automatically load `.env`.
+
+The browser loads pinned HTMX and Mapbox versions from CDNs. Mapbox receives map requests for the viewed area. Open-Meteo receives sampled coordinates, not the original uploaded file. The normalized route remains in PostgreSQL until replaced. Forecasts represent modeled conditions at sampled locations, not precise conditions throughout a mountain route. Open-Meteo's free API is for noncommercial use under its [terms](https://open-meteo.com/en/terms).
+
+### Run Go natively with a Docker database
+
+Requires Go 1.25 or later:
+
+```sh
+docker compose up -d --wait db
+export DATABASE_URL='postgres://trail:trail_local@127.0.0.1:5433/trail?sslmode=disable'
+# Export MAPBOX_PUBLIC_TOKEN as described above.
 go run .
 ```
 
-The variable lasts for this terminal session. Use a public `pk.` token, never a secret `sk.` token. The server exposes only a public token through `/api/map-config` because Mapbox runs in the browser. Configure URL restrictions for your app, including `http://127.0.0.1:8080` for local use. Restart the server after changing the environment. The app does not automatically load `.env` files.
-
-To keep the token across terminal sessions, create the already-ignored `.env` locally in your editor containing `export MAPBOX_PUBLIC_TOKEN='your-public-token'`, then run `source .env` before `go run .`. Do not commit the file.
-
-Open **http://127.0.0.1:8080**. Upload a GPX, KML, or KMZ file or select **Try the foothills example**. The included example is synthetic geometry near Bozeman, not a navigable trail. Choosing a different hour or map color reads the existing snapshot; only an upload, example request, or explicit refresh calls the weather API.
-
-When run natively, the app binds to loopback and is designed for one local user. It stores one complete route/forecast snapshot in `data/snapshot.json` and reloads it on restart. Set `TRAIL_DATA_DIR` to change that directory. Run only one process per data directory.
-
-The browser loads pinned HTMX and Mapbox versions from CDNs and uses Mapbox Standard Satellite or Standard Streets. These services need network access. The map style selector switches between satellite imagery and a street map while retaining the route and forecast samples. Open-Meteo receives sample coordinates; the full GPX file is not sent to it. Uploaded routes remain in local snapshot storage until replaced or deleted. Map requests reveal the viewed region to the map provider.
-
-Open-Meteo's free API is for noncommercial use under its [terms](https://open-meteo.com/en/terms). Weather data attribution is displayed in the app. Forecast values represent modeled conditions at sampled locations, not precise conditions throughout a mountain route.
-
-## Docker
-
-Requires Docker Desktop or Docker Engine. Build from the repository root:
-
-```sh
-docker build -t trail-conditions .
-```
-
-Export `MAPBOX_PUBLIC_TOKEN` in your terminal as described above, then run:
-
-```sh
-docker run --rm --name trail-conditions \
-  -p 127.0.0.1:8080:8080 \
-  -e MAPBOX_PUBLIC_TOKEN \
-  -v trail-conditions-data:/data \
-  trail-conditions
-```
-
-Open **http://127.0.0.1:8080**. Stop with Ctrl+C or `docker stop trail-conditions`. The named volume preserves the snapshot when the container is removed; running the command again reloads it. Stop any locally running copy first to free port 8080. To use another host port, change the left-hand port, for example `-p 127.0.0.1:8081:8080`, and allow that URL in your Mapbox token restrictions.
-
-The image compiles the Go binary in a build stage and runs it as UID 65532 in a distroless runtime with CA certificates for outbound HTTPS. Templates and browser assets are embedded in the binary. The runtime has no shell or Go compiler. Credentials and local snapshots are excluded from the build context. No token is needed during the build; it is passed only when running the container.
-
-The container listens on `0.0.0.0:8080` internally. The documented port mapping exposes it only on the host's loopback interface. Native execution defaults to `127.0.0.1:8080`; `TRAIL_LISTEN_ADDR` overrides the address. This is still a single-user application without authentication. Use only one process/container per snapshot volume.
+`DATABASE_URL` is required. Native execution defaults to `127.0.0.1:8080`; `TRAIL_LISTEN_ADDR` overrides it. The container sets that address to `0.0.0.0:8080` internally; Compose restricts host access with its loopback port mapping. No PostGIS extension is required.
 
 ## Architecture
 
@@ -62,12 +67,12 @@ internal/domain/                  Route, forecast, snapshot, validation and samp
 internal/application/             Import/refresh workflows and dependency contracts
 internal/adapters/geoimport/       GPX, KML, and KMZ decoding
 internal/adapters/openmeteo/       Provider HTTP requests and response normalization
-internal/adapters/snapshotfile/    Snapshot loading and atomic file publication
+internal/adapters/postgres/        PostgreSQL schema, loading, and transactional upsert
 internal/adapters/httpui/          HTTP handlers and HTML presentation
 web/                              HTMX templates, CSS, Mapbox JavaScript
 ```
 
-The domain imports no adapters or application code. The application depends on domain types and its own `RouteDecoder`, `Weather`, and `SnapshotStore` contracts. It does not import HTTP, XML, ZIP, or filesystem APIs. Concrete adapters satisfy those contracts and are wired in `main.go`.
+The domain imports no adapters or application code. The application depends on domain types and its own `RouteDecoder`, `Weather`, and `SnapshotStore` contracts. It does not import HTTP, XML, ZIP, or database driver APIs. Concrete adapters satisfy those contracts and are wired in `main.go`.
 
 The import workflow accepts a filename and bytes, decodes a domain route, validates and samples it, collects complete forecasts, persists the snapshot, and publishes it for readers. Refresh uses the stored route through the same collection workflow. Concurrency exclusion belongs to the application service, so it applies independently of HTTP. Snapshot readers receive copies rather than mutable access to published state.
 
@@ -94,7 +99,7 @@ KMZ imports every `.kml` member in archive order instead of silently selecting o
 3. Select at most 12 original GPS points, allocating sample slots equally across segments and placing interior targets by cumulative great-circle distance. Always retain each segment's endpoints. Sparse input can yield fewer samples; this is not spatial interpolation.
 4. Request three days of hourly temperature (°C), precipitation (mm), and wind speed (km/h) from Open-Meteo for each sample. Requests use UTC timestamps and explicit units.
 5. Require 72 aligned hourly readings, expected units, and no missing values for every sample. A forecast date change between requests fails the refresh. This checks structural completeness, not simultaneous provider-model versions.
-6. Write the complete snapshot to a temporary file, sync it, and rename it in the same directory. Publish it to in-memory readers only after persistence succeeds. A failed collection retains the previous snapshot and timestamp. This does not claim durability against every filesystem or power-loss scenario.
+6. Upsert the complete snapshot into PostgreSQL in one atomic statement. Publish it to in-memory readers only after the database acknowledges success. A failed collection never writes to the database. A rejected SQL statement leaves the previous row intact. If the connection fails after PostgreSQL commits but before acknowledgement reaches the app, the stored result may be newer than the in-memory result; restarting reloads the database state.
 7. Render HTML on the server and update the map from the selected snapshot.
 
 Precipitation is the model's hourly accumulation; temperature and wind are hourly readings. All forecast times in the interface are UTC.
@@ -131,9 +136,28 @@ HTMX reduces application-authored request and DOM-update code; it does not elimi
 
 POST routes require `HX-Request: true`.
 
+## PostgreSQL storage
+
+`current_snapshot` holds one row:
+
+| Column | Type | Purpose |
+| --- | --- | --- |
+| `singleton` | boolean primary key, constrained to true | Enforces one current snapshot |
+| `retrieved_at` | timestamptz | Time the complete forecast was collected |
+| `route` | jsonb | Normalized GeoJSON MultiLineString |
+| `forecasts` | jsonb | Forecast locations and their hourly values |
+
+The PostgreSQL adapter uses pgx. Its embedded `schema.sql` creates the table if absent at startup; this is initial schema creation, not a versioned migration framework. Save uses one parameterized `INSERT ... ON CONFLICT DO UPDATE`. The application's storage contract and forecast workflow do not depend on SQL or pgx.
+
+Ordinary PostgreSQL suffices because the app reads and replaces whole snapshots. It does not run spatial predicates or use spatial indexes. Geometry is stored as GeoJSON JSONB, not a PostGIS `geometry` column.
+
 ## Tests
 
+Start the local database, then run the full suite:
+
 ```sh
+docker compose up -d --wait db
+export TEST_DATABASE_URL='postgres://trail:trail_local@127.0.0.1:5433/trail?sslmode=disable'
 go test -race -coverpkg=./... -coverprofile=coverage.out ./...
 go tool cover -func=coverage.out
 go vet ./...
@@ -142,8 +166,6 @@ node --check --input-type=module < web/app.js
 node --test map.test.cjs
 ```
 
-Tests protect GPX/KML/KMZ segment preservation, archive bounds, coordinate validation, forecast completeness and units, bounded retry behavior, cancellation before publication, preservation of the last complete snapshot, multipart uploads, and server-rendered HTMX responses.
+Database tests create uniquely named temporary schemas and drop them afterward. They require schema-creation permission and do not alter the application's `public.current_snapshot`. They verify initial creation, upserts, reloads, failed-statement preservation, invalid stored data, cancellation, concurrent refresh exclusion, and GPX/KML/KMZ uploads through the HTTP handler to stored and rendered snapshots. Without `TEST_DATABASE_URL`, those integration tests explicitly skip; importer, provider-response, and map-configuration tests still run. CI supplies PostgreSQL so database tests run there.
 
-HTTP handlers run through `httptest` request/response recorders. Provider responses use a controlled HTTP transport. These tests exercise real parsing, rendering, and filesystem publication, but do not establish live API compatibility, DNS/TLS behavior, browser interactions, or forecast accuracy.
-
-The JavaScript regression test uses controlled DOM and Mapbox boundaries to verify that switching basemaps restores route and forecast layers without resetting the viewport. It does not verify WebGL rendering or live Mapbox resources.
+HTTP handlers use `httptest` recorders and provider responses use a controlled HTTP transport. PostgreSQL is real in database tests. These tests do not establish live Open-Meteo compatibility, DNS/TLS behavior, browser interactions, or forecast accuracy. The JavaScript regression test uses controlled DOM and Mapbox boundaries to verify layer restoration after changing basemaps; it does not test WebGL rendering.
