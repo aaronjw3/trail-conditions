@@ -6,17 +6,25 @@ An independent portfolio project demonstrating Go integration with the [Open-Met
 
 ## Run
 
-Requires Go 1.25 or later and internet access. No API key, database, npm build, or containers are required.
+Requires Go 1.25 or later and internet access. A Mapbox public token is required for the map. Open-Meteo needs no API key. No database, npm build, or containers are required.
 
-```sh
+In zsh, enter the token at a hidden prompt (it will not enter shell history):
+
+```zsh
+read -r -s 'MAPBOX_PUBLIC_TOKEN?Paste your public Mapbox token, then press Enter: '
+export MAPBOX_PUBLIC_TOKEN
 go run .
 ```
+
+The variable lasts for this terminal session. Use a public `pk.` token, never a secret `sk.` token. The server exposes only a public token through `/api/map-config` because Mapbox runs in the browser. Configure URL restrictions for your app, including `http://127.0.0.1:8080` for local use. Restart the server after changing the environment. The app does not automatically load `.env` files.
+
+To keep the token across terminal sessions, create the already-ignored `.env` locally in your editor containing `export MAPBOX_PUBLIC_TOKEN='your-public-token'`, then run `source .env` before `go run .`. Do not commit the file.
 
 Open **http://127.0.0.1:8080**. Upload a GPX file or select **Try the foothills example**. The included example is synthetic geometry near Bozeman, not a navigable trail. Choosing a different hour or map color reads the existing snapshot; only an upload, example request, or explicit refresh calls the weather API.
 
 The app binds to loopback and is designed for one local user. It stores one complete route/forecast snapshot in `data/snapshot.json` and reloads it on restart. Set `TRAIL_DATA_DIR` to change that directory. Run only one process per data directory.
 
-The browser loads pinned HTMX and MapLibre versions from CDNs and uses MapLibre's demonstration basemap. These services need network access. The demo basemap is intentionally minimal and does not provide trail navigation. Open-Meteo receives sample coordinates; the full GPX file is not sent to it. Uploaded routes remain in local snapshot storage until replaced or deleted. Map requests reveal the viewed region to the map provider.
+The browser loads pinned HTMX and Mapbox versions from CDNs and uses Mapbox Standard Satellite or Standard Streets. These services need network access. The map style selector switches between satellite imagery and a street map while retaining the route and forecast samples. Open-Meteo receives sample coordinates; the full GPX file is not sent to it. Uploaded routes remain in local snapshot storage until replaced or deleted. Map requests reveal the viewed region to the map provider.
 
 Open-Meteo's free API is for noncommercial use under its [terms](https://open-meteo.com/en/terms). Weather data attribution is displayed in the app. Forecast values represent modeled conditions at sampled locations, not precise conditions throughout a mountain route.
 
@@ -36,7 +44,7 @@ Precipitation is the model's hourly accumulation; temperature and wind are hourl
 
 Go's `html/template` renders forecast controls, timestamps, and reading cards. HTMX handles multipart GPX uploads, refresh POSTs, and hour/metric GETs, replacing the forecast panel with returned HTML. There is no custom JavaScript fetch layer or client-side rendering loop for those controls and cards.
 
-MapLibre owns a persistent WebGL map. `web/app.js` updates GeoJSON sources and paint properties after HTMX swaps, fits newly uploaded routes, and handles sample-card map navigation. It also displays request errors. The map is outside the swapped panel so changing the selected hour does not recreate it.
+Mapbox owns a persistent WebGL map. `web/app.js` updates GeoJSON sources and paint properties after HTMX swaps, fits newly uploaded routes, and handles sample-card map navigation. It also displays request errors. The map is outside the swapped panel so changing the selected hour does not recreate it.
 
 HTMX reduces application-authored request and DOM-update code; it does not eliminate JavaScript or make the map server-rendered. This small app uses Go standard-library templates, not a frontend framework or generated template code.
 
@@ -58,6 +66,7 @@ HTMX reduces application-authored request and DOM-update code; it does not elimi
 | `POST /example` | Collects forecasts for the bundled synthetic route |
 | `POST /refresh` | Refreshes the currently published sample locations |
 | `GET /panel?hour=0&metric=temperature` | Renders a selected snapshot hour; metric also accepts `precipitation` or `wind` |
+| `GET /api/map-config` | Returns the configured public Mapbox token; rejects missing or non-public tokens |
 | `GET /api/snapshot` | Returns the complete stored snapshot as JSON, or `null` |
 | `GET /example.gpx` | Downloads the synthetic example |
 
@@ -70,8 +79,11 @@ go test -race -cover ./...
 go vet ./...
 go build ./...
 node --check --input-type=module < web/app.js
+node --test map.test.cjs
 ```
 
 Tests protect GPX segment preservation, coordinate validation, forecast completeness and units, bounded retry behavior, cancellation before publication, preservation of the last complete snapshot, multipart uploads, and server-rendered HTMX responses.
 
 HTTP handlers run through `httptest` request/response recorders. Provider responses use a controlled HTTP transport. These tests exercise real parsing, rendering, and filesystem publication, but do not establish live API compatibility, DNS/TLS behavior, browser interactions, or forecast accuracy.
+
+The JavaScript regression test uses controlled DOM and Mapbox boundaries to verify that switching basemaps restores route and forecast layers without resetting the viewport. It does not verify WebGL rendering or live Mapbox resources.

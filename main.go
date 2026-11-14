@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -28,12 +29,13 @@ type Snapshot struct {
 	RetrievedAt time.Time  `json:"retrieved_at"`
 }
 type app struct {
-	mu       sync.RWMutex
-	snapshot *Snapshot
-	busy     chan struct{}
-	file     string
-	client   *http.Client
-	endpoint string
+	mapboxToken string
+	mu          sync.RWMutex
+	snapshot    *Snapshot
+	busy        chan struct{}
+	file        string
+	client      *http.Client
+	endpoint    string
 }
 
 func (a *app) collect(ctx context.Context, route Route, points []Point) error {
@@ -87,6 +89,18 @@ func (a *app) routes() http.Handler {
 	mux := http.NewServeMux()
 	web, _ := fs.Sub(assets, "web")
 	mux.Handle("GET /", http.FileServer(http.FS(web)))
+	mux.HandleFunc("GET /api/map-config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if !strings.HasPrefix(a.mapboxToken, "pk.") {
+			http.Error(w, "Set MAPBOX_PUBLIC_TOKEN to a public pk. token and restart the server.", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(struct {
+			Token string `json:"token"`
+		}{a.mapboxToken})
+	})
+
 	mux.HandleFunc("GET /example.gpx", func(w http.ResponseWriter, r *http.Request) {
 		data, _ := assets.ReadFile("examples/foothills.gpx")
 		w.Header().Set("Content-Type", "application/gpx+xml")
@@ -187,7 +201,7 @@ func main() {
 		slog.Error("create data directory", "error", err)
 		os.Exit(1)
 	}
-	a := &app{busy: make(chan struct{}, 1), file: filepath.Join(dir, "snapshot.json"), endpoint: "https://api.open-meteo.com/v1/forecast", client: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	a := &app{mapboxToken: strings.TrimSpace(os.Getenv("MAPBOX_PUBLIC_TOKEN")), busy: make(chan struct{}, 1), file: filepath.Join(dir, "snapshot.json"), endpoint: "https://api.open-meteo.com/v1/forecast", client: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	f, err := os.Open(a.file)
 	if err == nil {
 		data, readErr := io.ReadAll(io.LimitReader(f, 8<<20))

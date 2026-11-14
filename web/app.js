@@ -12,7 +12,7 @@ function updateMap() {
   const element = document.querySelector('#map-data');
   if (!element) return;
   pending = JSON.parse(element.textContent);
-  if (!map?.isStyleLoaded() || !map.getSource('samples')) return;
+  if (!map?.getSource('samples')) return;
   const {snapshot, hour, metric} = pending;
   const scale = scales[metric];
   const points = {type: 'FeatureCollection', features: snapshot.forecasts.map((f, i) => ({
@@ -25,7 +25,7 @@ function updateMap() {
   const key = JSON.stringify(snapshot.route);
   if (key !== routeKey) {
     const coords = snapshot.route.coordinates.flat();
-    const bounds = coords.reduce((b, p) => b.extend(p), new window.maplibregl.LngLatBounds(coords[0], coords[0]));
+    const bounds = coords.reduce((b, p) => b.extend(p), new window.mapboxgl.LngLatBounds(coords[0], coords[0]));
     map.fitBounds(bounds, {padding: 65, maxZoom: 14});
     routeKey = key;
   }
@@ -53,26 +53,32 @@ document.body.addEventListener('click', event => {
   if (card && map) map.flyTo({center: [Number(card.dataset.longitude), Number(card.dataset.latitude)], zoom: 13});
 });
 try {
-  const module = await import('https://unpkg.com/maplibre-gl@6.18.0/dist/maplibre-gl.mjs');
-  const maplibregl = module.default || module;
-  window.maplibregl = maplibregl;
-  map = new maplibregl.Map({container: 'map', style: 'https://demotiles.maplibre.org/style.json', center: [-110.98, 45.71], zoom: 9});
-  map.addControl(new maplibregl.NavigationControl(), 'top-right');
+  const configResponse = await fetch('/api/map-config');
+  if (!configResponse.ok) throw new Error(await configResponse.text());
+  const {token} = await configResponse.json();
+  if (!window.mapboxgl) throw new Error('Mapbox could not load. Check your connection.');
+  map = new mapboxgl.Map({container: 'map', accessToken: token, style: 'mapbox://styles/mapbox/standard-satellite', center: [-121.735, 46.82], zoom: 10});
+  map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+  document.querySelector('#basemap').addEventListener('change', event => {
+    map.setStyle(`mapbox://styles/mapbox/${event.target.value}`);
+  });
   map.on('error', () => {
     const error = document.querySelector('#map-error');
     error.hidden = false;
     error.textContent = 'Some map resources could not load. Forecast readings remain available below.';
   });
-  map.on('load', () => {
+  map.on('style.load', () => {
+    // Changing styles removes custom sources and layers; recreate them each time.
+    document.querySelector('#map-error').hidden = true;
     map.addSource('route', {type: 'geojson', data: {type: 'FeatureCollection', features: []}});
     map.addSource('samples', {type: 'geojson', data: {type: 'FeatureCollection', features: []}});
-    map.addLayer({id: 'route-halo', type: 'line', source: 'route', paint: {'line-color': '#fff', 'line-width': 7}});
-    map.addLayer({id: 'route', type: 'line', source: 'route', paint: {'line-color': '#285b48', 'line-width': 3}});
-    map.addLayer({id: 'samples', type: 'circle', source: 'samples', paint: {'circle-radius': 8, 'circle-color': '#e3923c', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2}});
+    map.addLayer({id: 'route-halo', type: 'line', source: 'route', slot: 'top', paint: {'line-color': '#fff', 'line-width': 7}});
+    map.addLayer({id: 'route', type: 'line', source: 'route', slot: 'top', paint: {'line-color': '#285b48', 'line-width': 3}});
+    map.addLayer({id: 'samples', type: 'circle', source: 'samples', slot: 'top', paint: {'circle-radius': 8, 'circle-color': '#e3923c', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2}});
     updateMap();
   });
-} catch {
+} catch (cause) {
   const error = document.querySelector('#map-error');
   error.hidden = false;
-  error.textContent = 'Map unavailable. Check your connection or WebGL support. Forecast readings still work below.';
+  error.textContent = `${cause.message || 'Map unavailable.'} Forecast readings still work below.`;
 }

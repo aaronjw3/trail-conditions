@@ -237,3 +237,23 @@ func TestPersistenceFailureDoesNotPublish(t *testing.T) {
 		t.Fatal("published before persistence")
 	}
 }
+
+func TestMapConfigExposesOnlyPublicTokens(t *testing.T) {
+	for _, token := range []string{"", "sk.test-secret", "pk.test-public"} {
+		a := &app{mapboxToken: token}
+		recorder := httptest.NewRecorder()
+		a.routes().ServeHTTP(recorder, httptest.NewRequest("GET", "/api/map-config", nil))
+		if token == "pk.test-public" {
+			if recorder.Code != 200 || !strings.Contains(recorder.Body.String(), token) {
+				t.Fatal("public token unavailable")
+			}
+		} else {
+			if recorder.Code != 503 || strings.Contains(recorder.Body.String(), "sk.test-secret") {
+				t.Fatal("invalid token exposed")
+			}
+		}
+		if recorder.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("configuration should not be cached")
+		}
+	}
+}
