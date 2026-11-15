@@ -18,8 +18,9 @@ type gpxPoint struct {
 
 func parseGPX(r io.Reader) (domain.Route, error) {
 	var doc struct {
-		XMLName xml.Name `xml:"gpx"`
-		Tracks  []struct {
+		XMLName   xml.Name   `xml:"gpx"`
+		Waypoints []gpxPoint `xml:"wpt"`
+		Tracks    []struct {
 			Segments []struct {
 				Points []gpxPoint `xml:"trkpt"`
 			} `xml:"trkseg"`
@@ -56,14 +57,14 @@ func parseGPX(r io.Reader) (domain.Route, error) {
 	for _, route := range doc.Routes {
 		groups = append(groups, route.Points)
 	}
-	if len(groups) == 0 || len(groups) > domain.MaxRouteSegments {
-		return domain.Route{}, fmt.Errorf("provide 1–%d track segments or routes; standalone waypoints are not routes", domain.MaxRouteSegments)
+	route := domain.Route{}
+	for _, waypoint := range doc.Waypoints {
+		groups = append(groups, []gpxPoint{waypoint})
 	}
-	route := domain.Route{Type: "MultiLineString"}
 	count := 0
 	for _, group := range groups {
-		if len(group) < 2 {
-			return domain.Route{}, fmt.Errorf("each segment needs at least two points")
+		if len(group) == 0 {
+			continue
 		}
 		points := make([]domain.Point, 0, len(group))
 		for _, p := range group {
@@ -78,7 +79,11 @@ func parseGPX(r io.Reader) (domain.Route, error) {
 			}
 			points = append(points, domain.Point{lon, lat})
 		}
-		route.Coordinates = append(route.Coordinates, points)
+		if len(points) == 1 {
+			route.Points = append(route.Points, points[0])
+		} else {
+			route.Lines = append(route.Lines, points)
+		}
 	}
 	return route, nil
 }

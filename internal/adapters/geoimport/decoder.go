@@ -11,7 +11,7 @@ import (
 	"github.com/aaronjw3/trail-conditions/internal/domain"
 )
 
-// Decoder normalizes supported route formats into WGS84 line segments.
+// Decoder normalizes supported route formats into WGS84 points, lines, and polygons.
 // File extension selects the parser; each parser validates the actual content.
 type Decoder struct{}
 
@@ -48,7 +48,7 @@ func parseKMZ(data []byte) (domain.Route, error) {
 	if len(archive.File) > 64 {
 		return domain.Route{}, fmt.Errorf("KMZ exceeds 64 entries")
 	}
-	route := domain.Route{Type: "MultiLineString"}
+	route := domain.Route{}
 	remaining := int64(8 << 20)
 	for _, entry := range archive.File {
 		if entry.FileInfo().IsDir() || !strings.EqualFold(filepath.Ext(entry.Name), ".kml") {
@@ -74,13 +74,10 @@ func parseKMZ(data []byte) (domain.Route, error) {
 		if err != nil {
 			return domain.Route{}, fmt.Errorf("KMZ KML member: %w", err)
 		}
-		route.Coordinates = append(route.Coordinates, part.Coordinates...)
-		if len(route.Coordinates) > domain.MaxRouteSegments {
-			return domain.Route{}, fmt.Errorf("provide at most 6 route segments")
-		}
+		route.Points = append(route.Points, part.Points...)
+		route.Lines = append(route.Lines, part.Lines...)
+		route.Polygons = append(route.Polygons, part.Polygons...)
 	}
-	if len(route.Coordinates) == 0 {
-		return domain.Route{}, fmt.Errorf("KMZ contains no KML route geometry")
-	}
+
 	return route, nil
 }

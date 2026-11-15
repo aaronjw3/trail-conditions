@@ -19,12 +19,18 @@ function updateMap() {
     type: 'Feature', geometry: {type: 'Point', coordinates: f.point},
     properties: {value: f[metric][hour], label: String(i + 1)}
   }))};
-  map.getSource('route').setData({type: 'Feature', geometry: snapshot.route, properties: {}});
+  const {points: waypoints = [], lines = [], polygons = []} = snapshot.route;
+  const features = [
+    ...waypoints.map(coordinates => ({type: 'Feature', geometry: {type: 'Point', coordinates}, properties: {}})),
+    ...lines.map(coordinates => ({type: 'Feature', geometry: {type: 'LineString', coordinates}, properties: {}})),
+    ...polygons.map(coordinates => ({type: 'Feature', geometry: {type: 'Polygon', coordinates}, properties: {}}))
+  ];
+  map.getSource('route').setData({type: 'FeatureCollection', features});
   map.getSource('samples').setData(points);
   map.setPaintProperty('samples', 'circle-color', ['interpolate', ['linear'], ['get', 'value'], scale.low, scale.colors[0], scale.high, scale.colors[1]]);
   const key = JSON.stringify(snapshot.route);
   if (key !== routeKey) {
-    const coords = snapshot.route.coordinates.flat();
+    const coords = [...waypoints, ...lines.flat(), ...polygons.flat(2)];
     const bounds = coords.reduce((b, p) => b.extend(p), new window.mapboxgl.LngLatBounds(coords[0], coords[0]));
     map.fitBounds(bounds, {padding: 65, maxZoom: 14});
     routeKey = key;
@@ -72,8 +78,10 @@ try {
     document.querySelector('#map-error').hidden = true;
     map.addSource('route', {type: 'geojson', data: {type: 'FeatureCollection', features: []}});
     map.addSource('samples', {type: 'geojson', data: {type: 'FeatureCollection', features: []}});
+    map.addLayer({id: 'areas', type: 'fill', source: 'route', slot: 'top', filter: ['==', ['geometry-type'], 'Polygon'], paint: {'fill-color': '#285b48', 'fill-opacity': 0.18}});
     map.addLayer({id: 'route-halo', type: 'line', source: 'route', slot: 'top', paint: {'line-color': '#fff', 'line-width': 7}});
     map.addLayer({id: 'route', type: 'line', source: 'route', slot: 'top', paint: {'line-color': '#285b48', 'line-width': 3}});
+    map.addLayer({id: 'waypoints', type: 'circle', source: 'route', slot: 'top', filter: ['==', ['geometry-type'], 'Point'], paint: {'circle-radius': 5, 'circle-color': '#285b48', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2}});
     map.addLayer({id: 'samples', type: 'circle', source: 'samples', slot: 'top', paint: {'circle-radius': 8, 'circle-color': '#e3923c', 'circle-stroke-color': '#fff', 'circle-stroke-width': 2}});
     updateMap();
   });

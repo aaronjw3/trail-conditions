@@ -17,4 +17,7 @@ BEGIN
         DROP TABLE current_snapshot;
     END IF;
 END $$;
+UPDATE route_snapshots
+SET route = jsonb_build_object('lines', route->'coordinates')
+WHERE route->>'type' = 'MultiLineString';
 COMMIT;

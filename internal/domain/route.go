@@ -10,14 +10,14 @@ const (
 	ForecastDays         = 3
 	ForecastHours        = ForecastDays * 24
 	MaxRoutePoints       = 20_000
-	MaxRouteSegments     = 6
 	MaxForecastLocations = 12
 )
 
 type Point [2]float64 // GeoJSON order: longitude, latitude.
 type Route struct {
-	Type        string    `json:"type"`
-	Coordinates [][]Point `json:"coordinates"`
+	Points   []Point     `json:"points,omitempty"`
+	Lines    [][]Point   `json:"lines,omitempty"`
+	Polygons [][][]Point `json:"polygons,omitempty"`
 }
 type Forecast struct {
 	Point         Point     `json:"point"`
@@ -42,29 +42,86 @@ type Snapshot struct {
 }
 
 func (route Route) Samples() ([]Point, error) {
-	if route.Type != "MultiLineString" || len(route.Coordinates) == 0 || len(route.Coordinates) > MaxRouteSegments {
-		return nil, fmt.Errorf("provide 1–%d route segments", MaxRouteSegments)
-	}
+	// Sampling paths never connect separate features. Polygon samples follow the
+	// exterior boundary; interior rings are retained for rendering and validation.
+	paths := make([][]Point, 0, len(route.Lines)+len(route.Points)+len(route.Polygons))
 	count := 0
-	for _, segment := range route.Coordinates {
-		if len(segment) < 2 {
-			return nil, fmt.Errorf("each segment needs at least two points")
+	for _, point := range route.Points {
+		paths = append(paths, []Point{point})
+		count++
+	}
+	for _, line := range route.Lines {
+		if len(line) < 2 {
+			return nil, fmt.Errorf("each line needs at least two points")
 		}
-		for _, point := range segment {
-			count++
-			if count > MaxRoutePoints {
-				return nil, fmt.Errorf("route exceeds %d points", MaxRoutePoints)
+		paths = append(paths, line)
+		count += len(line)
+	}
+	for _, polygon := range route.Polygons {
+		if len(polygon) == 0 {
+			return nil, fmt.Errorf("polygon needs an exterior ring")
+		}
+		for _, ring := range polygon {
+			if len(ring) < 4 || ring[0] != ring[len(ring)-1] {
+				return nil, fmt.Errorf("polygon rings need at least four coordinates and must be closed")
 			}
+			unique := make(map[Point]bool)
+			for _, point := range ring {
+				unique[point] = true
+			}
+			if len(unique) < 3 {
+				return nil, fmt.Errorf("polygon rings need at least three distinct vertices")
+			}
+			count += len(ring)
+		}
+		paths = append(paths, polygon[0])
+	}
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("file contains no supported geometry")
+	}
+	if count > MaxRoutePoints {
+		return nil, fmt.Errorf("geometry exceeds %d points", MaxRoutePoints)
+	}
+	// Validate every coordinate, including unsampled geometries and polygon holes.
+	all := append([][]Point{route.Points}, route.Lines...)
+	for _, polygon := range route.Polygons {
+		all = append(all, polygon...)
+	}
+	for _, points := range all {
+		for _, point := range points {
 			if math.IsNaN(point[0]) || math.IsNaN(point[1]) || math.Abs(point[0]) > 180 || math.Abs(point[1]) > 90 {
 				return nil, fmt.Errorf("coordinates must be finite WGS84 longitude/latitude")
 			}
 		}
 	}
-	// Every segment gets both endpoints. Remaining slots follow distance along segments,
-	// never across gaps between tracks. Samples are original GPS points.
+	for _, line := range route.Lines {
+		nonzero := false
+		for _, point := range line[1:] {
+			if point != line[0] {
+				nonzero = true
+				break
+			}
+		}
+		if !nonzero {
+			return nil, fmt.Errorf("line has no length")
+		}
+	}
+	// Large collections retain every geometry, but use evenly spaced components
+	// for weather requests so the provider budget does not grow with file size.
+	if len(paths) > MaxForecastLocations {
+		selected := make([][]Point, MaxForecastLocations)
+		for i := range selected {
+			selected[i] = paths[i*(len(paths)-1)/(MaxForecastLocations-1)]
+		}
+		paths = selected
+	}
 	samples := []Point{}
-	budget := MaxForecastLocations / len(route.Coordinates)
-	for _, points := range route.Coordinates {
+	budget := MaxForecastLocations / len(paths)
+	for _, points := range paths {
+		if len(points) == 1 || budget == 1 {
+			samples = append(samples, points[0])
+			continue
+		}
 		distances := make([]float64, len(points))
 		for i := 1; i < len(points); i++ {
 			distances[i] = distances[i-1] + distance(points[i-1], points[i])
