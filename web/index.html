@@ -12,11 +12,25 @@
 <aside>
 <h1>Weather along your route</h1>
 <p class="intro">Explore the weather along your route, one location and hour at a time.</p>
-<form id="upload" hx-post="/forecast" hx-encoding="multipart/form-data" hx-disabled-elt="find button" hx-indicator="#loading">
-<label for="file">Your route <span>GPX / KML / KMZ · 2 MB</span></label>
-<input id="file" name="route" type="file" accept=".gpx,.kml,.kmz,application/gpx+xml,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz" required>
-<button type="submit" id="submit">Explore forecast <span>↗</span></button>
+<form id="upload">
+<label for="file">Your routes <span>GPX / KML / KMZ · 2 MB</span></label>
+<input id="file" name="route" type="file" multiple accept=".gpx,.kml,.kmz,application/gpx+xml,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz" required>
+<button type="submit" id="submit">Upload routes <span>↗</span></button>
 </form>
+<section id="uploads" aria-label="Upload queue" hidden>
+<h2>Uploads <span id="upload-summary" role="status"></span></h2>
+<p class="fine">Keep this tab open while routes process. Completed routes open in a new tab.</p>
+<ul id="upload-list"></ul>
+</section>
+<template id="upload-row">
+<li class="upload-row">
+<strong class="upload-name"></strong>
+<progress max="100" value="0" aria-label="File transfer"></progress>
+<p class="upload-status" role="status">Queued</p>
+<button type="button" class="upload-retry text-button" hidden>Retry</button>
+<a class="upload-open" target="_blank" rel="noopener" hidden>Open route ↗</a>
+</li>
+</template>
 <nav id="saved-routes" aria-label="Saved routes" hx-get="/routes" hx-trigger="load, routesChanged from:body" hx-target="this"></nav>
 <label for="basemap">Map style</label>
 <select id="basemap"><option value="standard-satellite">Satellite</option><option value="standard">Streets</option></select>
@@ -32,5 +46,6 @@
 <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.11/dist/htmx.min.js" integrity="sha384-2OatzQy1H+Zd/IIrjr1TcuDGqLXeHhbooAyJY1KdQMKnr4LZ22k31GBLdYKHmVjg" crossorigin="anonymous"></script>
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.35.0/mapbox-gl.js"></script>
 <script type="module" src="/app.js"></script>
+<script type="module" src="/uploads.js"></script>
 </body>
 </html>

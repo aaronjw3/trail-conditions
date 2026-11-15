@@ -18,7 +18,7 @@ Set `MAPBOX_PUBLIC_TOKEN` in `.env` to a public Mapbox `pk.` token. Allow `http:
 docker compose up -d --build
 ```
 
-Open **http://127.0.0.1:8080**. Upload a GPX, KML, or KMZ route. Each successful upload gets its own saved forecast and URL under `/routes/{id}`. Use the saved-routes list to reopen it. The map supports Satellite and Streets views.
+Open **http://127.0.0.1:8080**. Select one or more GPX, KML, or KMZ files. The upload queue shows each file’s transfer progress, forecast processing, and result. Up to three files process at once in each tab; additional files wait in the queue. Failed requests can be retried individually. Keep the tab open until processing finishes; the queue does not survive a reload. Each successful upload gets its own saved forecast and URL under `/routes/{id}`. Use the saved-routes list to reopen it. The map supports Satellite and Streets views.
 
 Compose starts the Go app on port `8080` and PostgreSQL on the host port set by `TRAIL_DB_PORT` (`55432` in `.env.example`). Change that setting if the port is occupied. The app connects to PostgreSQL at `db:5432` inside Docker. Exported shell variables override `.env` values.
 
@@ -59,7 +59,7 @@ The application depends on domain types and contracts for decoding, weather, and
 
 Uploads are decoded into GeoJSON line segments and sampled at up to 12 locations. The app fetches 72 hourly readings for every location, saves the complete snapshot, then publishes it to the UI. Three weather requests can run concurrently across all uploads and refreshes. PostgreSQL stores the route and forecasts as JSONB; PostGIS is not required.
 
-HTMX handles uploads, refreshes, and forecast selections through server-rendered HTML. JavaScript manages the persistent Mapbox map, updates its sources and styling, and displays request errors. Changing the selected hour or metric uses the saved forecast without requesting new weather.
+HTMX handles the saved-route list, refreshes, and forecast selections through server-rendered HTML. JavaScript manages the upload queue and byte-transfer progress, and the persistent Mapbox map. `POST /forecast` accepts one multipart `route` file with `X-Requested-With: XMLHttpRequest` and returns HTTP 201 with a saved route `url` after processing completes. The queue tracks requests in the browser; processing and concurrency limits remain in the application layer. Changing the selected hour or metric uses the saved forecast without requesting new weather.
 
 ## Imports and limits
 

@@ -35,6 +35,7 @@ func (a *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	web, _ := fs.Sub(a.assets, "web")
 	mux.Handle("GET /app.js", http.FileServer(http.FS(web)))
+	mux.Handle("GET /uploads.js", http.FileServer(http.FS(web)))
 	mux.Handle("GET /style.css", http.FileServer(http.FS(web)))
 	mux.HandleFunc("GET /{$}", a.page)
 	mux.HandleFunc("GET /routes/{id}", a.page)
@@ -78,7 +79,8 @@ func (a *Handler) Routes() http.Handler {
 }
 
 func (a *Handler) refresh(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("HX-Request") != "true" {
+	isUpload := r.PathValue("id") == ""
+	if (isUpload && r.Header.Get("X-Requested-With") != "XMLHttpRequest") || (!isUpload && r.Header.Get("HX-Request") != "true") {
 		http.Error(w, "missing request header", http.StatusForbidden)
 		return
 	}
@@ -139,7 +141,12 @@ func (a *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.PathValue("id") == "" {
-		w.Header().Set("HX-Redirect", "/routes/"+snapshot.ID)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(struct {
+			URL string `json:"url"`
+		}{URL: "/routes/" + snapshot.ID})
 		return
 	}
 	w.Header().Set("HX-Trigger-After-Swap", "routesChanged")
