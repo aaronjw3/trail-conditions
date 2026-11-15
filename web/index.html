@@ -11,9 +11,9 @@
 <main>
 <aside>
 <h1>Weather along your route</h1>
-<p class="intro">Explore the weather along your route, one location and hour at a time.</p>
+<p class="intro">Explore weather at waypoints, along routes, and around area boundaries.</p>
 <form id="upload">
-<label for="file">Your routes <span>GPX / KML / KMZ · 2 MB</span></label>
+<label for="file">Your files <span>GPX / KML / KMZ · 2 MB</span></label>
 <input id="file" name="route" type="file" multiple accept=".gpx,.kml,.kmz,application/gpx+xml,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz" required>
 <button type="submit" id="submit">Upload routes <span>↗</span></button>
 </form>
@@ -36,7 +36,7 @@
 <select id="basemap"><option value="standard-satellite">Satellite</option><option value="standard">Streets</option></select>
 <p id="status" role="status" aria-live="polite">Choose a route to get started.</p>
 <p id="loading" class="htmx-indicator" role="status">Fetching a complete forecast…</p>
-<footer>Forecasts describe sampled locations, not every step of a trail. Mountain conditions can differ from the model.<br><br>Weather: <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo</a> · Map: Mapbox</footer>
+<footer>Forecasts describe sampled locations, not an entire route or area. Mountain conditions can differ from the model.<br><br>Weather: <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo</a> · Map: Mapbox</footer>
 </aside>
 <section class="workspace" aria-label="Route map and forecast readings">
 <div class="map-wrap"><div id="map" aria-label="Interactive route map"></div><div class="map-badge">FORECAST LOCATIONS <span id="sample-count">No route loaded</span></div><p id="map-error" hidden></p></div>

@@ -1,6 +1,6 @@
 # Trail Conditions
 
-Upload a GPX, KML, or KMZ route and explore three days of hourly temperature, precipitation, and wind forecasts on a Mapbox map.
+Upload GPX, KML, or KMZ points, routes, and areas and explore three days of hourly temperature, precipitation, and wind forecasts on a Mapbox map.
 
 A Go application using the [Open-Meteo API](https://open-meteo.com/en/docs), PostgreSQL, HTMX, and Mapbox.
 
@@ -28,7 +28,7 @@ docker compose stop         # Stop the app and database
 docker compose start        # Restart existing containers
 ```
 
-Use `docker compose up -d --build` after code changes; restarting alone does not rebuild the image. Saved data persists in the `postgres-data` volume. Existing single-snapshot storage is migrated automatically to a route named “Saved route.”
+Use `docker compose up -d --build` after code changes; restarting alone does not rebuild the image. Saved data persists in the `postgres-data` volume. Existing single-snapshot storage is migrated automatically to a route named “Saved route.” Saved line geometry is migrated to the mixed-geometry storage format without discarding forecasts.
 
 ### Run Go locally
 
@@ -50,14 +50,14 @@ internal/domain/              Route, forecast, sampling, and validation
 internal/application/         Import/refresh workflows and adapter contracts
 internal/adapters/geoimport/   GPX, KML, and KMZ decoding
 internal/adapters/openmeteo/   Weather API client
-internal/adapters/postgres/    Snapshot storage
+internal/adapters/postgres/    Geometry and forecast storage
 internal/adapters/httpui/      HTTP handlers and HTML rendering
 web/                          Templates, CSS, and Mapbox JavaScript
 ```
 
 The application depends on domain types and contracts for decoding, weather, and storage. Adapters implement those contracts; `main.go` wires them together. Communication uses HTTP, HTML, and JSON.
 
-Uploads are decoded into GeoJSON line segments and sampled at up to 12 locations. The app fetches 72 hourly readings for every location, saves the complete snapshot, then publishes it to the UI. Three weather requests can run concurrently across all uploads and refreshes. PostgreSQL stores the route and forecasts as JSONB; PostGIS is not required.
+Uploads are decoded into typed point, line, and polygon collections. The map displays all geometry; forecasts use up to 12 sampled locations. Polygon samples follow exterior boundaries, not interiors or holes. Large collections use a subset of their geometries for weather sampling. The app fetches 72 hourly readings for every location, saves the complete snapshot, then publishes it to the UI. Three weather requests can run concurrently across all uploads and refreshes. The map converts domain geometry to GeoJSON for Mapbox. PostgreSQL stores geometry and forecasts as JSONB; PostGIS is not required.
 
 HTMX handles the saved-route list, refreshes, and forecast selections through server-rendered HTML. JavaScript manages the upload queue and byte-transfer progress, and the persistent Mapbox map. `POST /forecast` accepts one multipart `route` file with `X-Requested-With: XMLHttpRequest` and returns HTTP 201 with a saved route `url` after processing completes. The queue tracks requests in the browser; processing and concurrency limits remain in the application layer. Changing the selected hour or metric uses the saved forecast without requesting new weather.
 
@@ -65,12 +65,12 @@ HTMX handles the saved-route list, refreshes, and forecast selections through se
 
 | Format | Supported geometry |
 | --- | --- |
-| GPX | Track segments and routes |
-| KML | LineString, MultiGeometry, gx:Track, and gx:MultiTrack |
+| GPX | Waypoints, track segments, routes, and mixtures; single-point paths become points |
+| KML | Point, LineString, LinearRing, Polygon with holes, MultiGeometry, gx:Track, and gx:MultiTrack |
 | KMZ | Supported KML documents inside a ZIP archive |
 
-- Uploads: at most 2 MiB, 20,000 points, and 6 segments. Separate segments remain separate; elevation, timestamps, and styles are not retained.
-- KMZ: read in memory without extracting files to disk; at most 64 entries and 8 MiB of expanded KML. Non-KML assets are ignored. Unsupported geometry and remote KML links are rejected.
+- Uploads: at most 2 MiB and 20,000 coordinates across all geometries. Points remain separate; line segments and polygon holes are preserved. Elevation, names, timestamps, and styles are not retained. Polygon rings must be closed with at least three distinct vertices; full topology validation is not performed.
+- KMZ: read in memory without extracting files to disk; at most 64 entries and 8 MiB of expanded KML. Non-KML assets are ignored. KML models, image overlays, and remote links are rejected.
 - Weather: up to three concurrent requests, a 15-second timeout per attempt, and a 90-second deadline for the whole operation. Temporary connection failures and HTTP 502/503/504 share a three-attempt retry budget with bounded waits.
 - Up to four uploads or refreshes can run at once. Further requests receive HTTP 429. Refreshing the same route twice concurrently returns HTTP 409. A failed upload creates no saved route; a failed refresh preserves that route's previous complete snapshot. Forecasts refresh only on upload or explicit request; displayed times are UTC.
 

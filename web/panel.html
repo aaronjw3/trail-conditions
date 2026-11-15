@@ -11,7 +11,8 @@
 </form>
 <div class="legend"><span id="low"></span><div id="gradient"></div><span id="high"></span></div>
 <p class="fine">Retrieved {{.Retrieved}} · {{.ForecastHours}} hourly forecasts · Forecast times shown in UTC</p>
-<div class="section-head"><h2>Along your route</h2><span class="fine">Select a sample to locate it on the map</span></div>
+<div class="section-head"><h2>Forecast locations</h2><span class="fine">Select a sample to locate it on the map</span></div>
+<p class="fine">Up to 12 sampled locations. Polygon forecasts sample the exterior boundary, not the whole area.</p>
 <div id="readings">{{range .Rows}}
 <button class="sample" data-longitude="{{index .Point 0}}" data-latitude="{{index .Point 1}}">
 <span class="number">SAMPLE {{.Index}}</span>

@@ -14,11 +14,11 @@ import (
 const kmlNS = "http://www.opengis.net/kml/2.2"
 const gxNS = "http://www.google.com/kml/ext/2.2"
 
-// Read line paths in document order, preserving every separate geometry.
+// Preserve points, lines, polygon rings, and mixed collections.
 // No network links, XML entities, styles, or archive assets are resolved.
 func parseKML(r io.Reader) (domain.Route, error) {
 	decoder := xml.NewDecoder(r)
-	route := domain.Route{Type: "MultiLineString"}
+	route := domain.Route{}
 	depth := 0
 	rootSeen := false
 	geometry := ""
@@ -26,6 +26,11 @@ func parseKML(r io.Reader) (domain.Route, error) {
 	coordinateSeen := false
 	count := 0
 	var points []domain.Point
+	polygonDepth := 0
+	boundary, boundaryDepth := "", 0
+	var polygon [][]domain.Point
+	boundaryHasRing := false
+	outerSeen := false
 	for {
 		token, err := decoder.Token()
 		if err == io.EOF {
@@ -50,27 +55,51 @@ func parseKML(r io.Reader) (domain.Route, error) {
 			track := element.Name.Space == gxNS && element.Name.Local == "Track"
 			if standard {
 				switch element.Name.Local {
-				case "Point", "Polygon", "LinearRing", "Model", "NetworkLink", "GroundOverlay", "PhotoOverlay", "ScreenOverlay":
-					return domain.Route{}, fmt.Errorf("KML %s is not supported; provide line routes only", element.Name.Local)
+				case "Model", "NetworkLink", "GroundOverlay", "PhotoOverlay", "ScreenOverlay":
+					return domain.Route{}, fmt.Errorf("KML %s is not supported", element.Name.Local)
 				}
 			}
-			if (standard && element.Name.Local == "LineString") || track {
+			if standard && element.Name.Local == "Polygon" {
+				if geometry != "" || polygonDepth != 0 {
+					return domain.Route{}, fmt.Errorf("nested KML geometry")
+				}
+				polygonDepth = depth
+				polygon = [][]domain.Point{nil}
+				outerSeen = false
+			}
+			if standard && (element.Name.Local == "outerBoundaryIs" || element.Name.Local == "innerBoundaryIs") {
+				if polygonDepth == 0 || depth != polygonDepth+1 || boundary != "" {
+					return domain.Route{}, fmt.Errorf("invalid polygon boundary")
+				}
+				boundary, boundaryDepth = element.Name.Local, depth
+				boundaryHasRing = false
+				if boundary == "outerBoundaryIs" {
+					if outerSeen {
+						return domain.Route{}, fmt.Errorf("duplicate polygon exterior")
+					}
+					outerSeen = true
+				}
+			}
+			if (standard && (element.Name.Local == "Point" || element.Name.Local == "LineString" || element.Name.Local == "LinearRing")) || track {
 				if geometry != "" {
 					return domain.Route{}, fmt.Errorf("nested KML geometry")
+				}
+				if polygonDepth != 0 && (element.Name.Local != "LinearRing" || boundary == "" || depth != boundaryDepth+1 || boundaryHasRing) {
+					return domain.Route{}, fmt.Errorf("polygon boundaries must contain one LinearRing")
 				}
 				geometry = element.Name.Local
 				geometryDepth = depth
 				points = nil
 				coordinateSeen = false
 			}
-			lineCoords := standard && element.Name.Local == "coordinates" && geometry == "LineString"
+			lineCoords := standard && element.Name.Local == "coordinates" && geometry != "" && geometry != "Track"
 			trackCoords := element.Name.Space == gxNS && element.Name.Local == "coord" && geometry == "Track"
 			if lineCoords || trackCoords {
 				if depth != geometryDepth+1 {
-					return domain.Route{}, fmt.Errorf("coordinates must belong directly to a route geometry")
+					return domain.Route{}, fmt.Errorf("coordinates must belong directly to a geometry")
 				}
 				if lineCoords && coordinateSeen {
-					return domain.Route{}, fmt.Errorf("duplicate LineString coordinates")
+					return domain.Route{}, fmt.Errorf("duplicate geometry coordinates")
 				}
 				coordinateSeen = true
 				var text string
@@ -110,14 +139,53 @@ func parseKML(r io.Reader) (domain.Route, error) {
 			}
 		case xml.EndElement:
 			if geometry != "" && depth == geometryDepth {
-				if len(points) < 2 {
-					return domain.Route{}, fmt.Errorf("each KML line or track needs at least two coordinates")
-				}
-				route.Coordinates = append(route.Coordinates, points)
-				if len(route.Coordinates) > domain.MaxRouteSegments {
-					return domain.Route{}, fmt.Errorf("provide at most 6 route segments")
+				switch geometry {
+				case "Point":
+					if len(points) != 1 {
+						return domain.Route{}, fmt.Errorf("KML Point needs exactly one coordinate")
+					}
+					route.Points = append(route.Points, points[0])
+				case "LinearRing":
+					if len(points) < 4 || points[0] != points[len(points)-1] {
+						return domain.Route{}, fmt.Errorf("LinearRing needs at least four coordinates and must be closed")
+					}
+					if polygonDepth != 0 {
+						if boundary == "outerBoundaryIs" {
+							polygon[0] = points
+						} else {
+							polygon = append(polygon, points)
+						}
+						boundaryHasRing = true
+					} else {
+						unique := make(map[domain.Point]bool)
+						for _, point := range points {
+							unique[point] = true
+						}
+						if len(unique) < 3 {
+							return domain.Route{}, fmt.Errorf("LinearRing needs at least three distinct vertices")
+						}
+						route.Lines = append(route.Lines, points)
+					}
+				default:
+					if len(points) < 2 {
+						return domain.Route{}, fmt.Errorf("each KML line or track needs at least two coordinates")
+					}
+					route.Lines = append(route.Lines, points)
 				}
 				geometry = ""
+			}
+			if boundary != "" && depth == boundaryDepth {
+				if !boundaryHasRing {
+					return domain.Route{}, fmt.Errorf("polygon boundary has no ring")
+				}
+				boundary = ""
+			}
+			if polygonDepth != 0 && depth == polygonDepth {
+				if len(polygon[0]) == 0 {
+					return domain.Route{}, fmt.Errorf("polygon needs an exterior ring")
+				}
+				route.Polygons = append(route.Polygons, polygon)
+				polygonDepth = 0
 			}
 			depth--
 		case xml.CharData:
@@ -128,8 +196,8 @@ func parseKML(r io.Reader) (domain.Route, error) {
 			return domain.Route{}, fmt.Errorf("XML directives are not supported")
 		}
 	}
-	if !rootSeen || depth != 0 || len(route.Coordinates) == 0 {
-		return domain.Route{}, fmt.Errorf("KML contains no line routes")
+	if !rootSeen || depth != 0 {
+		return domain.Route{}, fmt.Errorf("expected a KML document")
 	}
 	return route, nil
 }

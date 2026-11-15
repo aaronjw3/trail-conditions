@@ -195,7 +195,7 @@ func TestKMZUploadPublishesGeometryAndMapPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot == nil || !reflect.DeepEqual(snapshot.Route.Coordinates, want) {
+	if snapshot == nil || !reflect.DeepEqual(snapshot.Route.Lines, want) {
 		t.Fatal("KMZ segments changed during upload")
 	}
 	if len(requested) != 4 || !slices.Contains(requested, "-121.735000,46.785000") || !slices.Contains(requested, "-121.720000,46.805000") {
@@ -271,5 +271,85 @@ func TestWeatherFailureExplainsUploadAndPreservesSnapshot(t *testing.T) {
 	stored, err := store.Load(context.Background(), id)
 	if err != nil || !reflect.DeepEqual(before, stored) {
 		t.Fatalf("failed weather request changed snapshot: %v", err)
+	}
+}
+
+func TestMixedGeometryUploadsPersistAndReachMapPayload(t *testing.T) {
+	valid := forecastJSON(t, false)
+	service, store, _ := newService(t, func(*http.Request) (*http.Response, error) { return response(200, valid), nil })
+	ui, err := httpui.New(service, os.DirFS("../.."), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kml := `<kml><Placemark><MultiGeometry><Point><coordinates>-111,45</coordinates></Point><LineString><coordinates>-111,45 -112,46</coordinates></LineString><Polygon><outerBoundaryIs><LinearRing><coordinates>-112,45 -111,45 -111,46 -112,45</coordinates></LinearRing></outerBoundaryIs><innerBoundaryIs><LinearRing><coordinates>-111.8,45.2 -111.6,45.2 -111.6,45.3 -111.8,45.2</coordinates></LinearRing></innerBoundaryIs></Polygon></MultiGeometry></Placemark></kml>`
+	var archive bytes.Buffer
+	zipWriter := zip.NewWriter(&archive)
+	member, err := zipWriter.Create("doc.kml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = io.WriteString(member, kml); err != nil {
+		t.Fatal(err)
+	}
+	if err = zipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for filename, data := range map[string][]byte{
+		"waypoints.gpx": []byte(`<gpx><wpt lat="45" lon="-111"/><wpt lat="46" lon="-112"/></gpx>`),
+		"mixed.kml":     []byte(kml), "mixed.kmz": archive.Bytes(),
+	} {
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
+		part, err := writer.CreateFormFile("route", filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = part.Write(data); err != nil {
+			t.Fatal(err)
+		}
+		if err = writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest("POST", "/forecast", &body)
+		request.Header.Set("Content-Type", writer.FormDataContentType())
+		request.Header.Set("X-Requested-With", "XMLHttpRequest")
+		result := httptest.NewRecorder()
+		ui.Routes().ServeHTTP(result, request)
+		if result.Code != 201 {
+			t.Fatalf("%s: %d %s", filename, result.Code, result.Body.String())
+		}
+		var created struct {
+			URL string `json:"url"`
+		}
+		if err = json.Unmarshal(result.Body.Bytes(), &created); err != nil {
+			t.Fatal(err)
+		}
+		stored, err := store.Load(context.Background(), strings.TrimPrefix(created.URL, "/routes/"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if filename == "waypoints.gpx" {
+			if len(stored.Route.Points) != 2 || len(stored.Route.Lines) != 0 {
+				t.Fatal("waypoints were connected")
+			}
+		} else if len(stored.Route.Points) != 1 || len(stored.Route.Lines) != 1 || len(stored.Route.Polygons) != 1 || len(stored.Route.Polygons[0]) != 2 {
+			t.Fatal("lost mixed geometry")
+		}
+		panel := httptest.NewRecorder()
+		ui.Routes().ServeHTTP(panel, httptest.NewRequest("GET", created.URL+"/panel", nil))
+		start := strings.Index(panel.Body.String(), `<div id="map-data" hidden>`)
+		if start < 0 {
+			t.Fatal("missing map data")
+		}
+		dataJSON := strings.Split(strings.TrimPrefix(panel.Body.String()[start:], `<div id="map-data" hidden>`), "</div>")[0]
+		var payload struct {
+			Snapshot domain.Snapshot `json:"snapshot"`
+		}
+		if err = json.Unmarshal([]byte(html.UnescapeString(dataJSON)), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(payload.Snapshot.Route, stored.Route) {
+			t.Fatal("map lost geometry")
+		}
 	}
 }

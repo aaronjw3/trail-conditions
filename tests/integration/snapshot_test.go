@@ -54,7 +54,7 @@ func TestFailedRefreshPreservesPublishedSnapshotAndReloads(t *testing.T) {
 		t.Fatalf("restart lost snapshot: %v", err)
 	}
 	loaded.Forecasts[0].Temperature[0] = 999
-	loaded.Route.Coordinates[0][0][0] = 0
+	loaded.Route.Lines[0][0][0] = 0
 	loaded, err = reloaded.Snapshot(ctx, old.ID)
 	if err != nil || !reflect.DeepEqual(old, loaded) {
 		t.Fatalf("caller mutated stored snapshot: %v", err)
@@ -164,8 +164,17 @@ func TestExistingSnapshotMigratesOnce(t *testing.T) {
 		}
 		forecasts = append(forecasts, f)
 	}
-	routeJSON, _ := json.Marshal(route)
+	routeJSON, _ := json.Marshal(struct {
+		Type        string           `json:"type"`
+		Coordinates [][]domain.Point `json:"coordinates"`
+	}{Type: "MultiLineString", Coordinates: route.Lines})
 	forecastsJSON, _ := json.Marshal(forecasts)
+	if _, err := postgres.New(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO route_snapshots (id,name,retrieved_at,route,forecasts) VALUES ('existing','Existing route',now(),$1,$2)`, routeJSON, forecastsJSON); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pool.Exec(ctx, `CREATE TABLE current_snapshot (singleton boolean PRIMARY KEY, retrieved_at timestamptz,route jsonb,forecasts jsonb)`); err != nil {
 		t.Fatal(err)
 	}
@@ -181,8 +190,12 @@ func TestExistingSnapshotMigratesOnce(t *testing.T) {
 		if err != nil || loaded == nil || loaded.Name != "Saved route" || !reflect.DeepEqual(route, loaded.Route) || !reflect.DeepEqual(forecasts, loaded.Forecasts) {
 			t.Fatalf("migration lost snapshot: %v", err)
 		}
+		existing, err := store.Load(ctx, "existing")
+		if err != nil || existing == nil || !reflect.DeepEqual(route, existing.Route) || !reflect.DeepEqual(forecasts, existing.Forecasts) {
+			t.Fatalf("existing route migration lost geometry or forecasts: %v", err)
+		}
 		routes, err := store.List(ctx)
-		if err != nil || len(routes) != 1 {
+		if err != nil || len(routes) != 2 {
 			t.Fatalf("migration duplicated snapshot: %v", err)
 		}
 	}

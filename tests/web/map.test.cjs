@@ -7,7 +7,7 @@ const vm = require('node:vm');
 // This does not test Mapbox rendering, WebGL, or live styles.
 test('style changes restore route and selected forecast without resetting the viewport', async () => {
   const snapshot = {
-    route: {type: 'MultiLineString', coordinates: [[[-121.7, 46.8], [-121.75, 46.85]]]},
+    route: {points: [[-121.8, 46.9]], lines: [[[-121.7, 46.8], [-121.75, 46.85]]], polygons: [[[[-122, 46], [-121, 46], [-121, 47], [-122, 46]], [[-121.8, 46.2], [-121.6, 46.2], [-121.6, 46.3], [-121.8, 46.2]]]]},
     forecasts: [{point: [-121.7, 46.8], temperature: [4], precipitation: [0], wind: [12]}]
   };
   const elements = new Map();
@@ -40,8 +40,13 @@ test('style changes restore route and selected forecast without resetting the vi
   assert.equal(instance.fits, 1);
   elements.get('#basemap').change({target: {value: 'standard'}});
   assert.equal(instance.style, 'mapbox://styles/mapbox/standard');
-  assert.deepEqual(instance.layers, ['route-halo', 'route', 'samples']);
-  assert.equal(JSON.stringify(instance.sources.route.data.geometry), JSON.stringify(snapshot.route));
+  assert.deepEqual(instance.layers, ['areas', 'route-halo', 'route', 'waypoints', 'samples']);
+  assert.equal(instance.sources.route.data.type, 'FeatureCollection');
+  assert.equal(JSON.stringify(instance.sources.route.data.features.map(f => f.geometry)), JSON.stringify([
+    {type: 'Point', coordinates: snapshot.route.points[0]},
+    {type: 'LineString', coordinates: snapshot.route.lines[0]},
+    {type: 'Polygon', coordinates: snapshot.route.polygons[0]}
+  ]));
   assert.equal(instance.sources.samples.data.features[0].properties.value, 12);
   assert.equal(instance.fits, 1);
   assert.equal(elements.get('#sample-count').textContent, '1 forecast locations');
