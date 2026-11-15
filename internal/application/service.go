@@ -2,30 +2,35 @@ package application
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
-	"slices"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/aaronjw3/trail-conditions/internal/domain"
+	"golang.org/x/sync/errgroup"
 )
 
-// Contracts are owned by the workflow; adapters depend on these domain types.
 type RouteDecoder interface {
-	Decode(filename string, data []byte) (domain.Route, error)
+	Decode(string, []byte) (domain.Route, error)
 }
 type Weather interface {
 	Forecast(context.Context, domain.Point) (domain.Forecast, error)
 }
 type SnapshotStore interface {
-	Load(context.Context) (*domain.Snapshot, error)
+	Load(context.Context, string) (*domain.Snapshot, error)
+	List(context.Context) ([]domain.SavedRoute, error)
 	Save(context.Context, *domain.Snapshot) error
 }
 
-var ErrWeatherUnavailable = errors.New("weather service unavailable")
-
-var ErrBusy = errors.New("a forecast request is already running")
+var (
+	ErrWeatherUnavailable = errors.New("weather service unavailable")
+	ErrBusy               = errors.New("this route is already being refreshed")
+	ErrCapacity           = errors.New("four uploads or refreshes are already running; try again shortly")
+	ErrNotFound           = errors.New("route not found")
+)
 
 type InputError struct{ Err error }
 
@@ -33,104 +38,114 @@ func (e *InputError) Error() string { return e.Err.Error() }
 func (e *InputError) Unwrap() error { return e.Err }
 
 type Service struct {
-	decoder  RouteDecoder
-	weather  Weather
-	store    SnapshotStore
-	refresh  sync.Mutex
-	mu       sync.RWMutex
-	snapshot *domain.Snapshot
+	decoder      RouteDecoder
+	weather      Weather
+	store        SnapshotStore
+	operations   chan struct{}
+	weatherSlots chan struct{}
+	refreshing   sync.Map
 }
 
-func New(ctx context.Context, decoder RouteDecoder, weather Weather, store SnapshotStore) (*Service, error) {
+func New(decoder RouteDecoder, weather Weather, store SnapshotStore) (*Service, error) {
 	if decoder == nil || weather == nil || store == nil {
 		return nil, fmt.Errorf("decoder, weather provider, and snapshot store are required")
 	}
-	snapshot, err := store.Load(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if snapshot != nil {
-		if err := snapshot.Validate(); err != nil {
-			return nil, err
-		}
-	}
-	return &Service{decoder: decoder, weather: weather, store: store, snapshot: snapshot}, nil
+	return &Service{
+		decoder:      decoder,
+		weather:      weather,
+		store:        store,
+		operations:   make(chan struct{}, 4),
+		weatherSlots: make(chan struct{}, 3),
+	}, nil
 }
 
-// Snapshot returns a copy so callers cannot mutate a published result.
-func (s *Service) Snapshot() *domain.Snapshot {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.snapshot == nil {
-		return nil
+func (s *Service) Snapshot(ctx context.Context, id string) (*domain.Snapshot, error) {
+	snapshot, err := s.store.Load(ctx, id)
+	if err == nil && snapshot == nil {
+		return nil, ErrNotFound
 	}
-	copy := *s.snapshot
-	copy.Route.Coordinates = make([][]domain.Point, len(s.snapshot.Route.Coordinates))
-	for i, segment := range s.snapshot.Route.Coordinates {
-		copy.Route.Coordinates[i] = slices.Clone(segment)
-	}
-	copy.Forecasts = slices.Clone(s.snapshot.Forecasts)
-	for i, f := range s.snapshot.Forecasts {
-		copy.Forecasts[i].Times = slices.Clone(f.Times)
-		copy.Forecasts[i].Temperature = slices.Clone(f.Temperature)
-		copy.Forecasts[i].Precipitation = slices.Clone(f.Precipitation)
-		copy.Forecasts[i].Wind = slices.Clone(f.Wind)
-	}
-	return &copy
+	return snapshot, err
 }
-func (s *Service) Import(ctx context.Context, filename string, data []byte) error {
-	if !s.refresh.TryLock() {
-		return ErrBusy
-	}
-	defer s.refresh.Unlock()
+func (s *Service) Routes(ctx context.Context) ([]domain.SavedRoute, error) { return s.store.List(ctx) }
+
+func (s *Service) Import(ctx context.Context, filename string, data []byte) (*domain.Snapshot, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
+	}
+	select {
+	case s.operations <- struct{}{}:
+		defer func() { <-s.operations }()
+	default:
+		return nil, ErrCapacity
 	}
 	route, err := s.decoder.Decode(filename, data)
 	if err != nil {
-		return &InputError{err}
+		return nil, &InputError{err}
 	}
-	return s.collect(ctx, route)
+	next := &domain.Snapshot{ID: rand.Text(), Name: filepath.Base(filename), Route: route}
+	return s.collect(ctx, next)
 }
-func (s *Service) Refresh(ctx context.Context) error {
-	if !s.refresh.TryLock() {
-		return ErrBusy
+
+func (s *Service) Refresh(ctx context.Context, id string) (*domain.Snapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	defer s.refresh.Unlock()
-	previous := s.Snapshot()
-	if previous == nil {
-		return &InputError{fmt.Errorf("upload a route first")}
+	if _, loaded := s.refreshing.LoadOrStore(id, struct{}{}); loaded {
+		return nil, ErrBusy
 	}
-	return s.collect(ctx, previous.Route)
-}
-func (s *Service) collect(ctx context.Context, route domain.Route) error {
-	points, err := route.Samples()
+	defer s.refreshing.Delete(id)
+	select {
+	case s.operations <- struct{}{}:
+		defer func() { <-s.operations }()
+	default:
+		return nil, ErrCapacity
+	}
+	previous, err := s.Snapshot(ctx, id)
 	if err != nil {
-		return &InputError{err}
+		return nil, err
 	}
-	next := &domain.Snapshot{Route: route}
-	for _, point := range points {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		forecast, err := s.weather.Forecast(ctx, point)
-		if err != nil {
-			return fmt.Errorf("%w: %w", ErrWeatherUnavailable, err)
-		}
-		next.Forecasts = append(next.Forecasts, forecast)
+	return s.collect(ctx, &domain.Snapshot{ID: id, Name: previous.Name, Route: previous.Route})
+}
+
+func (s *Service) collect(ctx context.Context, next *domain.Snapshot) (*domain.Snapshot, error) {
+	points, err := next.Route.Samples()
+	if err != nil {
+		return nil, &InputError{err}
+	}
+	next.Forecasts = make([]domain.Forecast, len(points))
+	group, requestCtx := errgroup.WithContext(ctx)
+	for i, point := range points {
+		group.Go(func() error {
+			select {
+			case s.weatherSlots <- struct{}{}:
+				defer func() { <-s.weatherSlots }()
+			case <-requestCtx.Done():
+				return requestCtx.Err()
+			}
+			if err := requestCtx.Err(); err != nil {
+				return err
+			}
+			forecast, err := s.weather.Forecast(requestCtx, point)
+			if err != nil {
+				return fmt.Errorf("%w: %w", ErrWeatherUnavailable, err)
+			}
+			// Each goroutine owns one slot, preserving route order regardless of completion order.
+			next.Forecasts[i] = forecast
+			return nil
+		})
+	}
+	if err := group.Wait(); err != nil {
+		return nil, err
 	}
 	next.RetrievedAt = time.Now().UTC().Truncate(time.Microsecond)
 	if err := next.Validate(); err != nil {
-		return err
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	if err := s.store.Save(ctx, next); err != nil {
-		return err
+		return nil, err
 	}
-	s.mu.Lock()
-	s.snapshot = next
-	s.mu.Unlock()
-	return nil
+	return next, nil
 }

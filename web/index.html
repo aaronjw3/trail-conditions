@@ -7,17 +7,17 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body hx-target="#panel" hx-headers='{"HX-Request":"true"}'>
-<header><a class="brand" href="/">△ <span>TRAIL CONDITIONS</span></a><span class="eyebrow">A forecast along the way</span></header>
+<header><a class="brand" href="/">△ <span>TRAIL CONDITIONS</span></a></header>
 <main>
 <aside>
-<p class="eyebrow">PLAN WITH PERSPECTIVE</p>
-<h1>One route.<br>Changing skies.</h1>
+<h1>Weather along your route</h1>
 <p class="intro">Explore the weather along your route, one location and hour at a time.</p>
 <form id="upload" hx-post="/forecast" hx-encoding="multipart/form-data" hx-disabled-elt="find button" hx-indicator="#loading">
 <label for="file">Your route <span>GPX / KML / KMZ · 2 MB</span></label>
 <input id="file" name="route" type="file" accept=".gpx,.kml,.kmz,application/gpx+xml,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz" required>
 <button type="submit" id="submit">Explore forecast <span>↗</span></button>
 </form>
+<nav id="saved-routes" aria-label="Saved routes" hx-get="/routes" hx-trigger="load, routesChanged from:body" hx-target="this"></nav>
 <label for="basemap">Map style</label>
 <select id="basemap"><option value="standard-satellite">Satellite</option><option value="standard">Streets</option></select>
 <p id="status" role="status" aria-live="polite">Choose a route to get started.</p>
@@ -25,8 +25,8 @@
 <footer>Forecasts describe sampled locations, not every step of a trail. Mountain conditions can differ from the model.<br><br>Weather: <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo</a> · Map: Mapbox</footer>
 </aside>
 <section class="workspace" aria-label="Route map and forecast readings">
-<div class="map-wrap"><div id="map" aria-label="Interactive route map"></div><div class="map-badge">ROUTE OUTLOOK <span id="sample-count">No route loaded</span></div><p id="map-error" hidden></p></div>
-<div id="panel" hx-get="/panel" hx-trigger="load" class="readings"><p class="empty">Loading your saved route…</p></div>
+<div class="map-wrap"><div id="map" aria-label="Interactive route map"></div><div class="map-badge">FORECAST LOCATIONS <span id="sample-count">No route loaded</span></div><p id="map-error" hidden></p></div>
+<div id="panel" hx-get="{{.PanelURL}}" hx-trigger="load" class="readings"><p class="empty">Loading your saved route…</p></div>
 </section>
 </main>
 <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.11/dist/htmx.min.js" integrity="sha384-2OatzQy1H+Zd/IIrjr1TcuDGqLXeHhbooAyJY1KdQMKnr4LZ22k31GBLdYKHmVjg" crossorigin="anonymous"></script>

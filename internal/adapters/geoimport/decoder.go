@@ -75,7 +75,7 @@ func parseKMZ(data []byte) (domain.Route, error) {
 			return domain.Route{}, fmt.Errorf("KMZ KML member: %w", err)
 		}
 		route.Coordinates = append(route.Coordinates, part.Coordinates...)
-		if len(route.Coordinates) > 6 {
+		if len(route.Coordinates) > domain.MaxRouteSegments {
 			return domain.Route{}, fmt.Errorf("provide at most 6 route segments")
 		}
 	}

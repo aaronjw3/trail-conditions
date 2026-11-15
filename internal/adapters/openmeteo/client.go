@@ -23,7 +23,17 @@ type Client struct {
 
 func (c Client) Forecast(ctx context.Context, point domain.Point) (domain.Forecast, error) {
 	client, endpoint := c.HTTP, c.Endpoint
-	q := url.Values{"latitude": {strconv.FormatFloat(point[1], 'f', 6, 64)}, "longitude": {strconv.FormatFloat(point[0], 'f', 6, 64)}, "hourly": {"temperature_2m,precipitation,wind_speed_10m"}, "forecast_days": {"3"}, "timezone": {"GMT"}, "timeformat": {"unixtime"}, "temperature_unit": {"celsius"}, "wind_speed_unit": {"kmh"}, "precipitation_unit": {"mm"}}
+	q := url.Values{
+		"latitude":           {strconv.FormatFloat(point[1], 'f', 6, 64)},
+		"longitude":          {strconv.FormatFloat(point[0], 'f', 6, 64)},
+		"hourly":             {"temperature_2m,precipitation,wind_speed_10m"},
+		"forecast_days":      {strconv.Itoa(domain.ForecastDays)},
+		"timezone":           {"GMT"},
+		"timeformat":         {"unixtime"},
+		"temperature_unit":   {"celsius"},
+		"wind_speed_unit":    {"kmh"},
+		"precipitation_unit": {"mm"},
+	}
 	var raw struct {
 		Units struct {
 			Time          string `json:"time"`
@@ -88,8 +98,8 @@ func (c Client) Forecast(ctx context.Context, point domain.Point) (domain.Foreca
 		}
 	}
 	n := len(raw.Hourly.Times)
-	if n != 72 || len(raw.Hourly.Temperature) != n || len(raw.Hourly.Precipitation) != n || len(raw.Hourly.Wind) != n {
-		return domain.Forecast{}, fmt.Errorf("incomplete forecast: expected 72 aligned hourly readings")
+	if n != domain.ForecastHours || len(raw.Hourly.Temperature) != n || len(raw.Hourly.Precipitation) != n || len(raw.Hourly.Wind) != n {
+		return domain.Forecast{}, fmt.Errorf("incomplete forecast: expected %d aligned hourly readings", domain.ForecastHours)
 	}
 	if raw.Units.Time != "unixtime" || raw.Units.Temperature != "°C" || raw.Units.Precipitation != "mm" || raw.Units.Wind != "km/h" {
 		return domain.Forecast{}, fmt.Errorf("unexpected forecast units")

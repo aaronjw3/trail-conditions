@@ -1,7 +1,7 @@
-<div class="section-head"><h2>Forecast window</h2><button hx-post="/refresh" hx-indicator="#loading" hx-disabled-elt="this" class="text-button">Refresh forecast</button></div>
-<form hx-get="/panel" hx-trigger="change" hx-sync="this:replace">
+<div class="section-head"><h2>{{.Name}}</h2><button hx-post="/routes/{{.ID}}/refresh" hx-indicator="#loading" hx-disabled-elt="this" class="text-button">Refresh forecast</button></div>
+<form hx-get="/routes/{{.ID}}/panel" hx-trigger="change" hx-sync="this:replace">
 <label for="hour">{{.Time}}</label>
-<input type="range" id="hour" name="hour" min="0" max="71" value="{{.Hour}}">
+<input type="range" id="hour" name="hour" min="0" max="{{.MaxHour}}" value="{{.Hour}}">
 <label for="metric">Map color</label>
 <select id="metric" name="metric">
 <option value="temperature" {{if eq .Metric "temperature"}}selected{{end}}>Temperature · °C</option>
@@ -10,7 +10,7 @@
 </select>
 </form>
 <div class="legend"><span id="low"></span><div id="gradient"></div><span id="high"></span></div>
-<p class="fine">Retrieved {{.Retrieved}} · 72 hourly forecasts · Forecast times shown in UTC</p>
+<p class="fine">Retrieved {{.Retrieved}} · {{.ForecastHours}} hourly forecasts · Forecast times shown in UTC</p>
 <div class="section-head"><h2>Along your route</h2><span class="fine">Select a sample to locate it on the map</span></div>
 <div id="readings">{{range .Rows}}
 <button class="sample" data-longitude="{{index .Point 0}}" data-latitude="{{index .Point 1}}">

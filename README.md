@@ -2,7 +2,7 @@
 
 Upload a GPX, KML, or KMZ route and explore three days of hourly temperature, precipitation, and wind forecasts on a Mapbox map.
 
-An independent portfolio project demonstrating Go integration with the [Open-Meteo API](https://open-meteo.com/en/docs), geospatial imports, PostgreSQL persistence, and a server-rendered HTMX interface. Contains no employer code or data.
+A Go application using the [Open-Meteo API](https://open-meteo.com/en/docs), PostgreSQL, HTMX, and Mapbox.
 
 ## Run with Docker
 
@@ -18,7 +18,7 @@ Set `MAPBOX_PUBLIC_TOKEN` in `.env` to a public Mapbox `pk.` token. Allow `http:
 docker compose up -d --build
 ```
 
-Open **http://127.0.0.1:8080**. Upload a GPX, KML, or KMZ route. The map supports Satellite and Streets views.
+Open **http://127.0.0.1:8080**. Upload a GPX, KML, or KMZ route. Each successful upload gets its own saved forecast and URL under `/routes/{id}`. Use the saved-routes list to reopen it. The map supports Satellite and Streets views.
 
 Compose starts the Go app on port `8080` and PostgreSQL on the host port set by `TRAIL_DB_PORT` (`55432` in `.env.example`). Change that setting if the port is occupied. The app connects to PostgreSQL at `db:5432` inside Docker. Exported shell variables override `.env` values.
 
@@ -28,7 +28,7 @@ docker compose stop         # Stop the app and database
 docker compose start        # Restart existing containers
 ```
 
-Use `docker compose up -d --build` after code changes; restarting alone does not rebuild the image. Saved data persists in the `postgres-data` volume.
+Use `docker compose up -d --build` after code changes; restarting alone does not rebuild the image. Saved data persists in the `postgres-data` volume. Existing single-snapshot storage is migrated automatically to a route named “Saved route.”
 
 ### Run Go locally
 
@@ -57,7 +57,7 @@ web/                          Templates, CSS, and Mapbox JavaScript
 
 The application depends on domain types and contracts for decoding, weather, and storage. Adapters implement those contracts; `main.go` wires them together. Communication uses HTTP, HTML, and JSON.
 
-Uploads are decoded into GeoJSON line segments and sampled at up to 12 locations. The app fetches 72 hourly readings for every location, saves the complete snapshot, then publishes it to the UI. PostgreSQL stores the route and forecasts as JSONB; PostGIS is not required.
+Uploads are decoded into GeoJSON line segments and sampled at up to 12 locations. The app fetches 72 hourly readings for every location, saves the complete snapshot, then publishes it to the UI. Three weather requests can run concurrently across all uploads and refreshes. PostgreSQL stores the route and forecasts as JSONB; PostGIS is not required.
 
 HTMX handles uploads, refreshes, and forecast selections through server-rendered HTML. JavaScript manages the persistent Mapbox map, updates its sources and styling, and displays request errors. Changing the selected hour or metric uses the saved forecast without requesting new weather.
 
@@ -71,10 +71,10 @@ HTMX handles uploads, refreshes, and forecast selections through server-rendered
 
 - Uploads: at most 2 MiB, 20,000 points, and 6 segments. Separate segments remain separate; elevation, timestamps, and styles are not retained.
 - KMZ: read in memory without extracting files to disk; at most 64 entries and 8 MiB of expanded KML. Non-KML assets are ignored. Unsupported geometry and remote KML links are rejected.
-- Weather: sequential requests, a 15-second timeout per attempt, and a 90-second deadline for the whole operation. Temporary connection failures and HTTP 502/503/504 share a three-attempt retry budget with bounded waits.
-- Only one upload or refresh runs at a time. Failed weather collection preserves the previous complete snapshot. Forecasts refresh only on upload or explicit request; displayed times are UTC.
+- Weather: up to three concurrent requests, a 15-second timeout per attempt, and a 90-second deadline for the whole operation. Temporary connection failures and HTTP 502/503/504 share a three-attempt retry budget with bounded waits.
+- Up to four uploads or refreshes can run at once. Further requests receive HTTP 429. Refreshing the same route twice concurrently returns HTTP 409. A failed upload creates no saved route; a failed refresh preserves that route's previous complete snapshot. Forecasts refresh only on upload or explicit request; displayed times are UTC.
 
-This is a single-user local demo: run one app instance per database. Open-Meteo receives sampled coordinates, while the route is stored locally in PostgreSQL. Forecasts describe modeled conditions at sample locations, not precise conditions throughout a mountain route. See Open-Meteo's [usage terms](https://open-meteo.com/en/terms).
+Run one app instance per database so the concurrency limits apply to all requests. Saved route URLs are not access controls; this local application has no user authentication. Open-Meteo receives sampled coordinates, while the route is stored locally in PostgreSQL. Forecasts describe modeled conditions at sample locations, not precise conditions throughout a mountain route. See Open-Meteo's [usage terms](https://open-meteo.com/en/terms).
 
 ## Tests
 

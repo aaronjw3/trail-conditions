@@ -25,11 +25,6 @@ header {
 .brand span {
   font-size:13px;
   letter-spacing:.17em}
-.eyebrow {
-  font-size:10px;
-  font-weight:700;
-  letter-spacing:.16em;
-  color:#62776c}
 main {
   display:grid;
   grid-template-columns:340px 1fr;
@@ -221,8 +216,6 @@ header {
 @media(max-width:620px) {
   main {
   display:block}
-header .eyebrow {
-  display:none}
 aside {
   border-right:0}
 h1 br {
@@ -254,3 +247,11 @@ footer {
   max-width:620px}
 #panel .legend {
   max-width:620px}
+
+.saved-routes {
+  padding-left: 1.2rem;
+  max-height: 12rem;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+.saved-routes li { margin-bottom: 0.5rem; }

@@ -56,8 +56,8 @@ func parseGPX(r io.Reader) (domain.Route, error) {
 	for _, route := range doc.Routes {
 		groups = append(groups, route.Points)
 	}
-	if len(groups) == 0 || len(groups) > 6 {
-		return domain.Route{}, fmt.Errorf("provide 1–6 track segments or routes; standalone waypoints are not routes")
+	if len(groups) == 0 || len(groups) > domain.MaxRouteSegments {
+		return domain.Route{}, fmt.Errorf("provide 1–%d track segments or routes; standalone waypoints are not routes", domain.MaxRouteSegments)
 	}
 	route := domain.Route{Type: "MultiLineString"}
 	count := 0
@@ -73,8 +73,8 @@ func parseGPX(r io.Reader) (domain.Route, error) {
 				return domain.Route{}, fmt.Errorf("coordinates must be finite WGS84 longitude/latitude")
 			}
 			count++
-			if count > 20000 {
-				return domain.Route{}, fmt.Errorf("route exceeds 20,000 points")
+			if count > domain.MaxRoutePoints {
+				return domain.Route{}, fmt.Errorf("route exceeds %d points", domain.MaxRoutePoints)
 			}
 			points = append(points, domain.Point{lon, lat})
 		}

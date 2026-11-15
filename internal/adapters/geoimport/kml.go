@@ -103,8 +103,8 @@ func parseKML(r io.Reader) (domain.Route, error) {
 					}
 					points = append(points, domain.Point{values[0], values[1]})
 					count++
-					if count > 20000 {
-						return domain.Route{}, fmt.Errorf("route exceeds 20,000 points")
+					if count > domain.MaxRoutePoints {
+						return domain.Route{}, fmt.Errorf("route exceeds %d points", domain.MaxRoutePoints)
 					}
 				}
 			}
@@ -114,7 +114,7 @@ func parseKML(r io.Reader) (domain.Route, error) {
 					return domain.Route{}, fmt.Errorf("each KML line or track needs at least two coordinates")
 				}
 				route.Coordinates = append(route.Coordinates, points)
-				if len(route.Coordinates) > 6 {
+				if len(route.Coordinates) > domain.MaxRouteSegments {
 					return domain.Route{}, fmt.Errorf("provide at most 6 route segments")
 				}
 				geometry = ""
