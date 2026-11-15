@@ -215,15 +215,22 @@ func TestKMZUploadPublishesGeometryAndMapPayload(t *testing.T) {
 	}
 	payload := strings.SplitN(result.Body.String()[start+len(`<div id="map-data" hidden>`):], "</div>", 2)[0]
 	var view struct {
-		Snapshot *domain.Snapshot `json:"snapshot"`
-		Hour     int              `json:"hour"`
-		Metric   string           `json:"metric"`
+		Metric  string `json:"metric"`
+		Samples []struct {
+			Point domain.Point `json:"point"`
+			Value float64      `json:"value"`
+		} `json:"samples"`
 	}
 	if err = json.Unmarshal([]byte(html.UnescapeString(payload)), &view); err != nil {
 		t.Fatal("invalid embedded map data", err)
 	}
-	if !reflect.DeepEqual(view.Snapshot, stored) || view.Hour < 0 || view.Hour >= 72 || view.Metric != "temperature" {
-		t.Fatal("map received a different snapshot")
+	if len(view.Samples) != len(stored.Forecasts) || view.Metric != "temperature" {
+		t.Fatal("map received wrong samples")
+	}
+	for i, sample := range view.Samples {
+		if sample.Point != stored.Forecasts[i].Point || sample.Value != stored.Forecasts[i].Temperature[0] {
+			t.Fatal("map received different forecast readings")
+		}
 	}
 	var count int
 	if err := pool.QueryRow(context.Background(), "SELECT count(*) FROM route_snapshots").Scan(&count); err != nil || count != 1 {
@@ -336,19 +343,17 @@ func TestMixedGeometryUploadsPersistAndReachMapPayload(t *testing.T) {
 			t.Fatal("lost mixed geometry")
 		}
 		panel := httptest.NewRecorder()
-		ui.Routes().ServeHTTP(panel, httptest.NewRequest("GET", created.URL+"/panel", nil))
-		start := strings.Index(panel.Body.String(), `<div id="map-data" hidden>`)
+		ui.Routes().ServeHTTP(panel, httptest.NewRequest("GET", created.URL, nil))
+		start := strings.Index(panel.Body.String(), `<div id="route-data" hidden>`)
 		if start < 0 {
 			t.Fatal("missing map data")
 		}
-		dataJSON := strings.Split(strings.TrimPrefix(panel.Body.String()[start:], `<div id="map-data" hidden>`), "</div>")[0]
-		var payload struct {
-			Snapshot domain.Snapshot `json:"snapshot"`
-		}
+		dataJSON := strings.Split(strings.TrimPrefix(panel.Body.String()[start:], `<div id="route-data" hidden>`), "</div>")[0]
+		var payload domain.Route
 		if err = json.Unmarshal([]byte(html.UnescapeString(dataJSON)), &payload); err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(payload.Snapshot.Route, stored.Route) {
+		if !reflect.DeepEqual(payload, stored.Route) {
 			t.Fatal("map lost geometry")
 		}
 	}

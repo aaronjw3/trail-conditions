@@ -156,8 +156,10 @@ func (a *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 
 func (a *Handler) page(w http.ResponseWriter, r *http.Request) {
 	panelURL := "/panel"
+	var routeData string
 	if id := r.PathValue("id"); id != "" {
-		if _, err := a.service.Snapshot(r.Context(), id); err != nil {
+		snapshot, err := a.service.Snapshot(r.Context(), id)
+		if err != nil {
 			if errors.Is(err, application.ErrNotFound) {
 				http.NotFound(w, r)
 			} else {
@@ -165,10 +167,16 @@ func (a *Handler) page(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+		data, err := json.Marshal(snapshot.Route)
+		if err != nil {
+			http.Error(w, "Could not render geometry.", 500)
+			return
+		}
+		routeData = string(data)
 		panelURL = "/routes/" + id + "/panel"
 	}
 	var out bytes.Buffer
-	if err := a.templates.ExecuteTemplate(&out, "index.html", struct{ PanelURL string }{panelURL}); err != nil {
+	if err := a.templates.ExecuteTemplate(&out, "index.html", struct{ PanelURL, RouteData string }{PanelURL: panelURL, RouteData: routeData}); err != nil {
 		http.Error(w, "Could not render page.", 500)
 		return
 	}
