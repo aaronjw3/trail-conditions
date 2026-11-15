@@ -20,7 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-//go:embed web/* examples/*
+//go:embed web/*
 var assets embed.FS
 
 func main() {

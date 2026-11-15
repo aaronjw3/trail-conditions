@@ -21,7 +21,7 @@ func (a *Handler) panel(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if snapshot == nil {
-		w.Write([]byte(`<p class="empty">Upload a GPX, KML, or KMZ route or try the example to see its forecast.</p>`))
+		w.Write([]byte(`<p class="empty">Upload a GPX, KML, or KMZ route to see its forecast.</p>`))
 		return
 	}
 	hour, err := strconv.Atoi(r.URL.Query().Get("hour"))

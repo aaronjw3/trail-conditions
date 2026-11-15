@@ -5,7 +5,6 @@ RUN go mod download
 COPY main.go ./
 COPY internal/ ./internal/
 COPY web/ ./web/
-COPY examples/ ./examples/
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/trail-conditions .
 
 FROM gcr.io/distroless/static-debian13:nonroot

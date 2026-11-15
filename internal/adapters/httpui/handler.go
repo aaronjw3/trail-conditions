@@ -45,11 +45,6 @@ func (a *Handler) Routes() http.Handler {
 		}{a.mapboxToken})
 	})
 
-	mux.HandleFunc("GET /example.gpx", func(w http.ResponseWriter, r *http.Request) {
-		data, _ := fs.ReadFile(a.assets, "examples/foothills.gpx")
-		w.Header().Set("Content-Type", "application/gpx+xml")
-		w.Write(data)
-	})
 	mux.HandleFunc("GET /api/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		snapshot := a.service.Snapshot()
 		w.Header().Set("Cache-Control", "no-store")
@@ -57,7 +52,7 @@ func (a *Handler) Routes() http.Handler {
 		json.NewEncoder(w).Encode(snapshot)
 	})
 	mux.HandleFunc("GET /panel", a.panel)
-	for _, path := range []string{"/forecast", "/refresh", "/example"} {
+	for _, path := range []string{"/forecast", "/refresh"} {
 		mux.HandleFunc("POST "+path, a.refresh)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -80,9 +75,6 @@ func (a *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/refresh":
 		err = a.service.Refresh(ctx)
-	case "/example":
-		data, _ := fs.ReadFile(a.assets, "examples/foothills.gpx")
-		err = a.service.Import(ctx, "foothills.gpx", data)
 	default:
 		r.Body = http.MaxBytesReader(w, r.Body, (2<<20)+65536)
 		if err = r.ParseMultipartForm(2 << 20); err != nil {

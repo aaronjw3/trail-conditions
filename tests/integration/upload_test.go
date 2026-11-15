@@ -31,7 +31,7 @@ func TestHTTPUploadsRenderHTMLForAllFormats(t *testing.T) {
 	}
 	handler := ui.Routes()
 	denied := httptest.NewRecorder()
-	handler.ServeHTTP(denied, httptest.NewRequest("POST", "/example", nil))
+	handler.ServeHTTP(denied, httptest.NewRequest("POST", "/forecast", nil))
 	if denied.Code != 403 {
 		t.Fatal("accepted unmarked write")
 	}
@@ -183,7 +183,20 @@ func TestWeatherFailureExplainsUploadAndPreservesSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/example", nil)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("route", "route.gpx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = part.Write([]byte(twoSegments)); err != nil {
+		t.Fatal(err)
+	}
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/forecast", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
 	request.Header.Set("HX-Request", "true")
 	recorder := httptest.NewRecorder()
 	ui.Routes().ServeHTTP(recorder, request)

@@ -18,8 +18,6 @@
 <input id="file" name="route" type="file" accept=".gpx,.kml,.kmz,application/gpx+xml,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz" required>
 <button type="submit" id="submit">Explore forecast <span>↗</span></button>
 </form>
-<button id="example" class="secondary" hx-post="/example" hx-disabled-elt="this" hx-indicator="#loading">Try the foothills example</button>
-<p class="fine">Example geometry is synthetic, not a navigable trail.</p>
 <label for="basemap">Map style</label>
 <select id="basemap"><option value="standard-satellite">Satellite</option><option value="standard">Streets</option></select>
 <p id="status" role="status" aria-live="polite">Choose a route to get started.</p>
