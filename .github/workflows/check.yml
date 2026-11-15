@@ -48,8 +48,10 @@ jobs:
       - name: Build Go packages
         run: go build ./...
       - name: Check JavaScript syntax
-        run: node --check --input-type=module < web/app.js
-      - name: Test map behavior
+        run: |
+          node --check --input-type=module < web/app.js
+          node --check --input-type=module < web/uploads.js
+      - name: Test browser behavior
         run: node --test tests/web/*.test.cjs
       - name: Validate Compose configuration
         run: docker compose config --quiet

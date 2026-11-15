@@ -255,3 +255,20 @@ footer {
   overflow-wrap: anywhere;
 }
 .saved-routes li { margin-bottom: 0.5rem; }
+
+#upload-list {
+  list-style: none;
+  padding: 0;
+  max-height: 22rem;
+  overflow-y: auto;
+}
+.upload-row {
+  padding: 12px 0;
+  border-bottom: 1px solid #dce1d5;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.upload-name { display: block; margin-bottom: 8px; }
+.upload-row progress { width: 100%; accent-color: #285b48; }
+.upload-status { margin: 8px 0; }
+#upload-summary { display: block; font-weight: 400; margin-top: 6px; }

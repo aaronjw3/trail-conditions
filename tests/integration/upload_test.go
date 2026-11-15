@@ -64,11 +64,17 @@ func TestHTTPUploadsOpenSavedRoutesForAllFormats(t *testing.T) {
 		writer.Close()
 		req := httptest.NewRequest("POST", "/forecast", &body)
 		req.Header.Set("Content-Type", writer.FormDataContentType())
-		req.Header.Set("HX-Request", "true")
+		req.Header.Set("X-Requested-With", "XMLHttpRequest")
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, req)
-		lastID = strings.TrimPrefix(recorder.Header().Get("HX-Redirect"), "/routes/")
-		if recorder.Code != 200 {
+		var created struct {
+			URL string `json:"url"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &created); err != nil {
+			t.Fatal(err)
+		}
+		lastID = strings.TrimPrefix(created.URL, "/routes/")
+		if recorder.Code != http.StatusCreated {
 			t.Fatalf("upload failed: %d %s", recorder.Code, recorder.Body.String())
 		}
 		if lastID == "" {
@@ -169,14 +175,20 @@ func TestKMZUploadPublishesGeometryAndMapPayload(t *testing.T) {
 	}
 	req := httptest.NewRequest("POST", "/forecast", &body)
 	req.Header.Set("Content-Type", multipartWriter.FormDataContentType())
-	req.Header.Set("HX-Request", "true")
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 	result := httptest.NewRecorder()
 	handler.ServeHTTP(result, req)
-	if result.Code != 200 {
+	if result.Code != http.StatusCreated {
 		t.Fatalf("upload: %d %s", result.Code, result.Body.String())
 	}
 	want := [][]domain.Point{{{-121.735, 46.785}, {-121.730, 46.790}}, {{-121.725, 46.800}, {-121.720, 46.805}}}
-	id := strings.TrimPrefix(result.Header().Get("HX-Redirect"), "/routes/")
+	var created struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(result.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	id := strings.TrimPrefix(created.URL, "/routes/")
 	result = httptest.NewRecorder()
 	handler.ServeHTTP(result, httptest.NewRequest("GET", "/routes/"+id+"/panel", nil))
 	snapshot, err := service.Snapshot(context.Background(), id)
@@ -250,7 +262,7 @@ func TestWeatherFailureExplainsUploadAndPreservesSnapshot(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodPost, "/forecast", &body)
 	request.Header.Set("Content-Type", writer.FormDataContentType())
-	request.Header.Set("HX-Request", "true")
+	request.Header.Set("X-Requested-With", "XMLHttpRequest")
 	recorder := httptest.NewRecorder()
 	ui.Routes().ServeHTTP(recorder, request)
 	if recorder.Code != 502 || !strings.Contains(recorder.Body.String(), "Open-Meteo") || strings.Contains(recorder.Body.String(), "private diagnostic detail") {
