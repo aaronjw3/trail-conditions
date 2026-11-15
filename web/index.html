@@ -45,6 +45,7 @@
 </main>
 <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.11/dist/htmx.min.js" integrity="sha384-2OatzQy1H+Zd/IIrjr1TcuDGqLXeHhbooAyJY1KdQMKnr4LZ22k31GBLdYKHmVjg" crossorigin="anonymous"></script>
 <script src="https://api.mapbox.com/mapbox-gl-js/v3.35.0/mapbox-gl.js"></script>
+{{if .RouteData}}<div id="route-data" hidden>{{.RouteData}}</div>{{end}}
 <script type="module" src="/app.js"></script>
 <script type="module" src="/uploads.js"></script>
 </body>

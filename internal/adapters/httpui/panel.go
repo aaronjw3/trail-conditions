@@ -12,6 +12,11 @@ import (
 	"github.com/aaronjw3/trail-conditions/internal/domain"
 )
 
+type mapSample struct {
+	Point domain.Point `json:"point"`
+	Value float64      `json:"value"`
+}
+
 type reading struct {
 	Index                            int
 	Temperature, Precipitation, Wind float64
@@ -25,7 +30,7 @@ func (a *Handler) panel(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<p class="empty">Upload a GPX, KML, or KMZ route to see its forecast.</p>`))
 		return
 	}
-	snapshot, err := a.service.Snapshot(r.Context(), r.PathValue("id"))
+	snapshot, err := a.service.Forecasts(r.Context(), r.PathValue("id"))
 	if err != nil {
 		if errors.Is(err, application.ErrNotFound) {
 			http.NotFound(w, r)
@@ -52,7 +57,16 @@ func (a *Handler) panel(w http.ResponseWriter, r *http.Request) {
 		metric = "temperature"
 	}
 	rows := make([]reading, 0, len(snapshot.Forecasts))
+	samples := make([]mapSample, len(snapshot.Forecasts))
 	for i, f := range snapshot.Forecasts {
+		value := f.Temperature[hour]
+		switch metric {
+		case "precipitation":
+			value = f.Precipitation[hour]
+		case "wind":
+			value = f.Wind[hour]
+		}
+		samples[i].Point, samples[i].Value = f.Point, value
 		rows = append(rows, reading{
 			Index:         i + 1,
 			Temperature:   f.Temperature[hour],
@@ -62,10 +76,9 @@ func (a *Handler) panel(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	data, _ := json.Marshal(struct {
-		Snapshot *domain.Snapshot `json:"snapshot"`
-		Hour     int              `json:"hour"`
-		Metric   string           `json:"metric"`
-	}{Snapshot: snapshot, Hour: hour, Metric: metric})
+		Metric  string      `json:"metric"`
+		Samples []mapSample `json:"samples"`
+	}{Metric: metric, Samples: samples})
 	view := struct {
 		Hour, MaxHour, ForecastHours            int
 		ID, Name, Metric, Time, Retrieved, Data string

@@ -11,11 +11,30 @@ func (s Snapshot) Validate() error {
 	if err != nil {
 		return err
 	}
-	if s.ID == "" || s.Name == "" || s.RetrievedAt.IsZero() || len(s.Forecasts) != len(points) {
-		return fmt.Errorf("snapshot is missing its timestamp or forecast locations")
+	if err := s.ForecastSnapshot.Validate(); err != nil {
+		return err
+	}
+	if len(s.Forecasts) != len(points) {
+		return fmt.Errorf("snapshot has mismatched forecast locations")
 	}
 	for i, f := range s.Forecasts {
-		if f.Point != points[i] || len(f.Times) != ForecastHours || len(f.Temperature) != ForecastHours || len(f.Precipitation) != ForecastHours || len(f.Wind) != ForecastHours {
+		if f.Point != points[i] {
+			return fmt.Errorf("snapshot has mismatched forecast locations")
+		}
+	}
+	return nil
+}
+
+// Forecast-only reads validate the bounded weather data without loading geometry.
+func (s ForecastSnapshot) Validate() error {
+	if s.ID == "" || s.Name == "" || s.RetrievedAt.IsZero() || len(s.Forecasts) == 0 || len(s.Forecasts) > MaxForecastLocations {
+		return fmt.Errorf("snapshot is missing its timestamp or forecast locations")
+	}
+	for _, f := range s.Forecasts {
+		if math.IsNaN(f.Point[0]) || math.IsNaN(f.Point[1]) || math.Abs(f.Point[0]) > 180 || math.Abs(f.Point[1]) > 90 {
+			return fmt.Errorf("invalid forecast location")
+		}
+		if len(f.Times) != ForecastHours || len(f.Temperature) != ForecastHours || len(f.Precipitation) != ForecastHours || len(f.Wind) != ForecastHours {
 			return fmt.Errorf("snapshot has incomplete or mismatched forecasts")
 		}
 		for j, t := range f.Times {

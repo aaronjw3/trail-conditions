@@ -21,6 +21,7 @@ type Weather interface {
 }
 type SnapshotStore interface {
 	Load(context.Context, string) (*domain.Snapshot, error)
+	LoadForecasts(context.Context, string) (*domain.ForecastSnapshot, error)
 	List(context.Context) ([]domain.SavedRoute, error)
 	Save(context.Context, *domain.Snapshot) error
 }
@@ -66,6 +67,14 @@ func (s *Service) Snapshot(ctx context.Context, id string) (*domain.Snapshot, er
 	}
 	return snapshot, err
 }
+func (s *Service) Forecasts(ctx context.Context, id string) (*domain.ForecastSnapshot, error) {
+	snapshot, err := s.store.LoadForecasts(ctx, id)
+	if err == nil && snapshot == nil {
+		return nil, ErrNotFound
+	}
+	return snapshot, err
+}
+
 func (s *Service) Routes(ctx context.Context) ([]domain.SavedRoute, error) { return s.store.List(ctx) }
 
 func (s *Service) Import(ctx context.Context, filename string, data []byte) (*domain.Snapshot, error) {
@@ -82,7 +91,7 @@ func (s *Service) Import(ctx context.Context, filename string, data []byte) (*do
 	if err != nil {
 		return nil, &InputError{err}
 	}
-	next := &domain.Snapshot{ID: rand.Text(), Name: filepath.Base(filename), Route: route}
+	next := &domain.Snapshot{ForecastSnapshot: domain.ForecastSnapshot{ID: rand.Text(), Name: filepath.Base(filename)}, Route: route}
 	return s.collect(ctx, next)
 }
 
@@ -104,7 +113,7 @@ func (s *Service) Refresh(ctx context.Context, id string) (*domain.Snapshot, err
 	if err != nil {
 		return nil, err
 	}
-	return s.collect(ctx, &domain.Snapshot{ID: id, Name: previous.Name, Route: previous.Route})
+	return s.collect(ctx, &domain.Snapshot{ForecastSnapshot: domain.ForecastSnapshot{ID: id, Name: previous.Name}, Route: previous.Route})
 }
 
 func (s *Service) collect(ctx context.Context, next *domain.Snapshot) (*domain.Snapshot, error) {

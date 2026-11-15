@@ -33,12 +33,16 @@ type SavedRoute struct {
 	RetrievedAt time.Time `json:"retrieved_at"`
 }
 
-type Snapshot struct {
+type ForecastSnapshot struct {
 	ID          string     `json:"id"`
 	Name        string     `json:"name"`
-	Route       Route      `json:"route"`
 	Forecasts   []Forecast `json:"forecasts"`
 	RetrievedAt time.Time  `json:"retrieved_at"`
+}
+
+type Snapshot struct {
+	ForecastSnapshot
+	Route Route `json:"route"`
 }
 
 func (route Route) Samples() ([]Point, error) {

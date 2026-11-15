@@ -90,3 +90,23 @@ func (s *Store) List(ctx context.Context) ([]domain.SavedRoute, error) {
 	}
 	return routes, rows.Err()
 }
+
+func (s *Store) LoadForecasts(ctx context.Context, id string) (*domain.ForecastSnapshot, error) {
+	var snapshot domain.ForecastSnapshot
+	var forecasts []byte
+	err := s.pool.QueryRow(ctx, `SELECT id,name,retrieved_at,forecasts FROM route_snapshots WHERE id=$1`, id).Scan(&snapshot.ID, &snapshot.Name, &snapshot.RetrievedAt, &forecasts)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load forecasts: %w", err)
+	}
+	snapshot.RetrievedAt = snapshot.RetrievedAt.UTC()
+	if err = json.Unmarshal(forecasts, &snapshot.Forecasts); err != nil {
+		return nil, fmt.Errorf("decode forecasts: %w", err)
+	}
+	if err = snapshot.Validate(); err != nil {
+		return nil, fmt.Errorf("stored forecasts: %w", err)
+	}
+	return &snapshot, nil
+}
