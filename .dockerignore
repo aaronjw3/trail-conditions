@@ -2,7 +2,6 @@
 .github
 .env
 .env.*
-data
 trail-conditions
 coverage.out
 *.test

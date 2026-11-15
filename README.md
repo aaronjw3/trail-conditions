@@ -18,7 +18,7 @@ Set `MAPBOX_PUBLIC_TOKEN` in `.env` to a public Mapbox `pk.` token. Allow `http:
 docker compose up -d --build
 ```
 
-Open **http://127.0.0.1:8080**. Upload a route or try the bundled synthetic example near Bozeman. The map supports Satellite and Streets views.
+Open **http://127.0.0.1:8080**. Upload a GPX, KML, or KMZ route. The map supports Satellite and Streets views.
 
 Compose starts the Go app on port `8080` and PostgreSQL on the host port set by `TRAIL_DB_PORT` (`55432` in `.env.example`). Change that setting if the port is occupied. The app connects to PostgreSQL at `db:5432` inside Docker. Exported shell variables override `.env` values.
 
@@ -74,7 +74,7 @@ HTMX handles uploads, refreshes, and forecast selections through server-rendered
 - Weather: sequential requests, a 15-second timeout per attempt, and a 90-second deadline for the whole operation. Temporary connection failures and HTTP 502/503/504 share a three-attempt retry budget with bounded waits.
 - Only one upload or refresh runs at a time. Failed weather collection preserves the previous complete snapshot. Forecasts refresh only on upload or explicit request; displayed times are UTC.
 
-This is a single-user local demo: run one app instance per database. Open-Meteo receives sampled coordinates, while the route is stored locally in PostgreSQL. Forecasts describe modeled conditions at sample locations, not precise conditions throughout a mountain route. The bundled route is synthetic, not a navigation track. See Open-Meteo's [usage terms](https://open-meteo.com/en/terms).
+This is a single-user local demo: run one app instance per database. Open-Meteo receives sampled coordinates, while the route is stored locally in PostgreSQL. Forecasts describe modeled conditions at sample locations, not precise conditions throughout a mountain route. See Open-Meteo's [usage terms](https://open-meteo.com/en/terms).
 
 ## Tests
 
