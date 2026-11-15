@@ -6,6 +6,14 @@ import (
 	"time"
 )
 
+const (
+	ForecastDays         = 3
+	ForecastHours        = ForecastDays * 24
+	MaxRoutePoints       = 20_000
+	MaxRouteSegments     = 6
+	MaxForecastLocations = 12
+)
+
 type Point [2]float64 // GeoJSON order: longitude, latitude.
 type Route struct {
 	Type        string    `json:"type"`
@@ -19,15 +27,23 @@ type Forecast struct {
 	Wind          []float64 `json:"wind"`
 }
 
+type SavedRoute struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	RetrievedAt time.Time `json:"retrieved_at"`
+}
+
 type Snapshot struct {
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
 	Route       Route      `json:"route"`
 	Forecasts   []Forecast `json:"forecasts"`
 	RetrievedAt time.Time  `json:"retrieved_at"`
 }
 
 func (route Route) Samples() ([]Point, error) {
-	if route.Type != "MultiLineString" || len(route.Coordinates) == 0 || len(route.Coordinates) > 6 {
-		return nil, fmt.Errorf("provide 1–6 route segments")
+	if route.Type != "MultiLineString" || len(route.Coordinates) == 0 || len(route.Coordinates) > MaxRouteSegments {
+		return nil, fmt.Errorf("provide 1–%d route segments", MaxRouteSegments)
 	}
 	count := 0
 	for _, segment := range route.Coordinates {
@@ -36,8 +52,8 @@ func (route Route) Samples() ([]Point, error) {
 		}
 		for _, point := range segment {
 			count++
-			if count > 20000 {
-				return nil, fmt.Errorf("route exceeds 20,000 points")
+			if count > MaxRoutePoints {
+				return nil, fmt.Errorf("route exceeds %d points", MaxRoutePoints)
 			}
 			if math.IsNaN(point[0]) || math.IsNaN(point[1]) || math.Abs(point[0]) > 180 || math.Abs(point[1]) > 90 {
 				return nil, fmt.Errorf("coordinates must be finite WGS84 longitude/latitude")
@@ -47,7 +63,7 @@ func (route Route) Samples() ([]Point, error) {
 	// Every segment gets both endpoints. Remaining slots follow distance along segments,
 	// never across gaps between tracks. Samples are original GPS points.
 	samples := []Point{}
-	budget := 12 / len(route.Coordinates)
+	budget := MaxForecastLocations / len(route.Coordinates)
 	for _, points := range route.Coordinates {
 		distances := make([]float64, len(points))
 		for i := 1; i < len(points); i++ {

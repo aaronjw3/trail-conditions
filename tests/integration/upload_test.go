@@ -15,14 +15,16 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/aaronjw3/trail-conditions/internal/adapters/httpui"
 	"github.com/aaronjw3/trail-conditions/internal/domain"
 )
 
-func TestHTTPUploadsRenderHTMLForAllFormats(t *testing.T) {
+func TestHTTPUploadsOpenSavedRoutesForAllFormats(t *testing.T) {
 	valid := forecastJSON(t, false)
 	service, _, _ := newService(t, func(*http.Request) (*http.Response, error) { return response(200, valid), nil })
 	ui, err := httpui.New(service, os.DirFS("../.."), "")
@@ -49,6 +51,7 @@ func TestHTTPUploadsRenderHTMLForAllFormats(t *testing.T) {
 	if err = zw.Close(); err != nil {
 		t.Fatal(err)
 	}
+	var lastID string
 	for filename, input := range map[string][]byte{"route.gpx": []byte(twoSegments), "route.kml": []byte(kml), "route.kmz": archive.Bytes()} {
 
 		var body bytes.Buffer
@@ -64,17 +67,57 @@ func TestHTTPUploadsRenderHTMLForAllFormats(t *testing.T) {
 		req.Header.Set("HX-Request", "true")
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, req)
-		if recorder.Code != 200 || !strings.Contains(recorder.Body.String(), `hx-get="/panel"`) || !strings.Contains(recorder.Body.String(), "SAMPLE 4") {
+		lastID = strings.TrimPrefix(recorder.Header().Get("HX-Redirect"), "/routes/")
+		if recorder.Code != 200 {
+			t.Fatalf("upload failed: %d %s", recorder.Code, recorder.Body.String())
+		}
+		if lastID == "" {
+			t.Fatal("missing saved route URL")
+		}
+		recorder = httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest("GET", "/routes/"+lastID+"/panel", nil))
+		if recorder.Code != 200 || !strings.Contains(recorder.Body.String(), `hx-get="/routes/`+lastID+`/panel"`) || !strings.Contains(recorder.Body.String(), "SAMPLE 4") {
 			t.Fatalf("%s: %d %s", filename, recorder.Code, recorder.Body.String())
 		}
 	}
+	saved := httptest.NewRecorder()
+	handler.ServeHTTP(saved, httptest.NewRequest("GET", "/routes", nil))
+	if saved.Code != 200 || strings.Count(saved.Body.String(), "<li>") != 3 {
+		t.Fatal("saved route list missing uploads", saved.Body.String())
+	}
+	page := httptest.NewRecorder()
+	handler.ServeHTTP(page, httptest.NewRequest("GET", "/routes/"+lastID, nil))
+	if page.Code != 200 || !strings.Contains(page.Body.String(), `hx-get="/routes/`+lastID+`/panel"`) {
+		t.Fatal("route URL cannot reload its panel", page.Body.String())
+	}
+	api := httptest.NewRecorder()
+	handler.ServeHTTP(api, httptest.NewRequest("GET", "/api/routes/"+lastID, nil))
+	var snapshot domain.Snapshot
+	if api.Code != 200 || json.Unmarshal(api.Body.Bytes(), &snapshot) != nil || snapshot.ID != lastID {
+		t.Fatal("route JSON does not match URL")
+	}
+	for _, path := range []string{"/routes/missing", "/routes/missing/panel", "/api/routes/missing"} {
+		missing := httptest.NewRecorder()
+		handler.ServeHTTP(missing, httptest.NewRequest("GET", path, nil))
+		if missing.Code != 404 {
+			t.Fatalf("%s: expected 404, got %d", path, missing.Code)
+		}
+	}
+	refresh := httptest.NewRecorder()
+	refreshRequest := httptest.NewRequest("POST", "/routes/"+lastID+"/refresh", nil)
+	refreshRequest.Header.Set("HX-Request", "true")
+	handler.ServeHTTP(refresh, refreshRequest)
+	if refresh.Code != 200 || !strings.Contains(refresh.Body.String(), "SAMPLE 4") {
+		t.Fatal("route refresh failed", refresh.Body.String())
+	}
+
 	panel := httptest.NewRecorder()
-	handler.ServeHTTP(panel, httptest.NewRequest("GET", "/panel?hour=71&metric=wind", nil))
+	handler.ServeHTTP(panel, httptest.NewRequest("GET", "/routes/"+lastID+"/panel?hour=71&metric=wind", nil))
 	if panel.Code != 200 || !strings.Contains(panel.Body.String(), `value="wind" selected`) {
 		t.Fatal("selection not rendered")
 	}
 	invalid := httptest.NewRecorder()
-	handler.ServeHTTP(invalid, httptest.NewRequest("GET", "/panel?hour=72", nil))
+	handler.ServeHTTP(invalid, httptest.NewRequest("GET", "/routes/"+lastID+"/panel?hour=72", nil))
 	if invalid.Code != 400 {
 		t.Fatal("accepted invalid hour")
 	}
@@ -100,7 +143,10 @@ func TestKMZUploadPublishesGeometryAndMapPayload(t *testing.T) {
 	}
 	valid := forecastJSON(t, false)
 	var requested []string
+	var requestMu sync.Mutex
 	service, store, pool := newService(t, func(req *http.Request) (*http.Response, error) {
+		requestMu.Lock()
+		defer requestMu.Unlock()
 		requested = append(requested, req.URL.Query().Get("longitude")+","+req.URL.Query().Get("latitude"))
 		return response(200, valid), nil
 	})
@@ -130,14 +176,20 @@ func TestKMZUploadPublishesGeometryAndMapPayload(t *testing.T) {
 		t.Fatalf("upload: %d %s", result.Code, result.Body.String())
 	}
 	want := [][]domain.Point{{{-121.735, 46.785}, {-121.730, 46.790}}, {{-121.725, 46.800}, {-121.720, 46.805}}}
-	snapshot := service.Snapshot()
+	id := strings.TrimPrefix(result.Header().Get("HX-Redirect"), "/routes/")
+	result = httptest.NewRecorder()
+	handler.ServeHTTP(result, httptest.NewRequest("GET", "/routes/"+id+"/panel", nil))
+	snapshot, err := service.Snapshot(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if snapshot == nil || !reflect.DeepEqual(snapshot.Route.Coordinates, want) {
 		t.Fatal("KMZ segments changed during upload")
 	}
-	if len(requested) != 4 || requested[0] != "-121.735000,46.785000" || requested[3] != "-121.720000,46.805000" {
+	if len(requested) != 4 || !slices.Contains(requested, "-121.735000,46.785000") || !slices.Contains(requested, "-121.720000,46.805000") {
 		t.Fatal("wrong forecast locations", requested)
 	}
-	stored, err := store.Load(context.Background())
+	stored, err := store.Load(context.Background(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +214,7 @@ func TestKMZUploadPublishesGeometryAndMapPayload(t *testing.T) {
 		t.Fatal("map received a different snapshot")
 	}
 	var count int
-	if err := pool.QueryRow(context.Background(), "SELECT count(*) FROM current_snapshot").Scan(&count); err != nil || count != 1 {
+	if err := pool.QueryRow(context.Background(), "SELECT count(*) FROM route_snapshots").Scan(&count); err != nil || count != 1 {
 		t.Fatal("expected one complete snapshot row", count, err)
 	}
 }
@@ -174,10 +226,11 @@ func TestWeatherFailureExplainsUploadAndPreservesSnapshot(t *testing.T) {
 		}
 		return response(200, forecastJSON(t, false)), nil
 	})
-	if err := service.Import(context.Background(), "route.gpx", []byte(twoSegments)); err != nil {
+	before, err := service.Import(context.Background(), "route.gpx", []byte(twoSegments))
+	if err != nil {
 		t.Fatal(err)
 	}
-	before := service.Snapshot()
+	id := before.ID
 	fail = true
 	ui, err := httpui.New(service, os.DirFS("../.."), "")
 	if err != nil {
@@ -203,8 +256,8 @@ func TestWeatherFailureExplainsUploadAndPreservesSnapshot(t *testing.T) {
 	if recorder.Code != 502 || !strings.Contains(recorder.Body.String(), "Open-Meteo") || strings.Contains(recorder.Body.String(), "private diagnostic detail") {
 		t.Fatalf("unexpected response: %d %s", recorder.Code, recorder.Body.String())
 	}
-	stored, err := store.Load(context.Background())
-	if err != nil || !reflect.DeepEqual(before, stored) || !reflect.DeepEqual(before, service.Snapshot()) {
+	stored, err := store.Load(context.Background(), id)
+	if err != nil || !reflect.DeepEqual(before, stored) {
 		t.Fatalf("failed weather request changed snapshot: %v", err)
 	}
 }

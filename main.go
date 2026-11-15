@@ -24,7 +24,6 @@ import (
 var assets embed.FS
 
 func main() {
-
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		slog.Error("DATABASE_URL is required; use docker compose up --build or configure PostgreSQL")
@@ -50,8 +49,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	weather := openmeteo.Client{HTTP: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, Endpoint: "https://api.open-meteo.com/v1/forecast"}
-	service, err := application.New(startup, geoimport.Decoder{}, weather, store)
+	weather := openmeteo.Client{
+		HTTP: &http.Client{
+			Timeout: 15 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+		Endpoint: "https://api.open-meteo.com/v1/forecast",
+	}
+	service, err := application.New(geoimport.Decoder{}, weather, store)
 	if err != nil {
 		slog.Error("initialize application", "error", err)
 		os.Exit(1)
@@ -66,7 +73,14 @@ func main() {
 	if listen == "" {
 		listen = "127.0.0.1:8080"
 	}
-	server := &http.Server{Addr: listen, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 100 * time.Second, IdleTimeout: 60 * time.Second}
+	server := &http.Server{
+		Addr:              listen,
+		Handler:           handler.Routes(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       20 * time.Second,
+		WriteTimeout:      100 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	shutdownDone := make(chan struct{})

@@ -17,7 +17,7 @@ var schema string
 
 type Store struct{ pool *pgxpool.Pool }
 
-// New creates the singleton table before the application starts serving requests.
+// New initializes storage and migrates the previous single-snapshot table.
 // The caller owns the pool and closes it during shutdown.
 func New(ctx context.Context, pool *pgxpool.Pool) (*Store, error) {
 	if _, err := pool.Exec(ctx, schema); err != nil {
@@ -41,19 +41,19 @@ func (s *Store) Save(ctx context.Context, snapshot *domain.Snapshot) error {
 		return err
 	}
 	// One upsert is one PostgreSQL transaction: readers cannot see half a snapshot.
-	_, err = s.pool.Exec(ctx, `INSERT INTO current_snapshot (singleton,retrieved_at,route,forecasts)
- VALUES (true,$1,$2::jsonb,$3::jsonb)
- ON CONFLICT (singleton) DO UPDATE SET retrieved_at=EXCLUDED.retrieved_at,
- route=EXCLUDED.route,forecasts=EXCLUDED.forecasts`, snapshot.RetrievedAt, route, forecasts)
+	_, err = s.pool.Exec(ctx, `INSERT INTO route_snapshots (id,name,retrieved_at,route,forecasts)
+ VALUES ($1,$2,$3,$4::jsonb,$5::jsonb)
+ ON CONFLICT (id) DO UPDATE SET retrieved_at=EXCLUDED.retrieved_at,
+ route=EXCLUDED.route,forecasts=EXCLUDED.forecasts`, snapshot.ID, snapshot.Name, snapshot.RetrievedAt, route, forecasts)
 	if err != nil {
 		return fmt.Errorf("save snapshot: %w", err)
 	}
 	return nil
 }
-func (s *Store) Load(ctx context.Context) (*domain.Snapshot, error) {
+func (s *Store) Load(ctx context.Context, id string) (*domain.Snapshot, error) {
 	var snapshot domain.Snapshot
 	var route, forecasts []byte
-	err := s.pool.QueryRow(ctx, `SELECT retrieved_at,route,forecasts FROM current_snapshot WHERE singleton=true`).Scan(&snapshot.RetrievedAt, &route, &forecasts)
+	err := s.pool.QueryRow(ctx, `SELECT id,name,retrieved_at,route,forecasts FROM route_snapshots WHERE id=$1`, id).Scan(&snapshot.ID, &snapshot.Name, &snapshot.RetrievedAt, &route, &forecasts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -71,4 +71,22 @@ func (s *Store) Load(ctx context.Context) (*domain.Snapshot, error) {
 		return nil, fmt.Errorf("stored snapshot: %w", err)
 	}
 	return &snapshot, nil
+}
+
+func (s *Store) List(ctx context.Context) ([]domain.SavedRoute, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id,name,retrieved_at FROM route_snapshots ORDER BY retrieved_at DESC,id`)
+	if err != nil {
+		return nil, fmt.Errorf("list routes: %w", err)
+	}
+	defer rows.Close()
+	routes := []domain.SavedRoute{}
+	for rows.Next() {
+		var route domain.SavedRoute
+		if err := rows.Scan(&route.ID, &route.Name, &route.RetrievedAt); err != nil {
+			return nil, err
+		}
+		route.RetrievedAt = route.RetrievedAt.UTC()
+		routes = append(routes, route)
+	}
+	return routes, rows.Err()
 }

@@ -11,11 +11,11 @@ func (s Snapshot) Validate() error {
 	if err != nil {
 		return err
 	}
-	if s.RetrievedAt.IsZero() || len(s.Forecasts) != len(points) {
+	if s.ID == "" || s.Name == "" || s.RetrievedAt.IsZero() || len(s.Forecasts) != len(points) {
 		return fmt.Errorf("snapshot is missing its timestamp or forecast locations")
 	}
 	for i, f := range s.Forecasts {
-		if f.Point != points[i] || len(f.Times) != 72 || len(f.Temperature) != 72 || len(f.Precipitation) != 72 || len(f.Wind) != 72 {
+		if f.Point != points[i] || len(f.Times) != ForecastHours || len(f.Temperature) != ForecastHours || len(f.Precipitation) != ForecastHours || len(f.Wind) != ForecastHours {
 			return fmt.Errorf("snapshot has incomplete or mismatched forecasts")
 		}
 		for j, t := range f.Times {

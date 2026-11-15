@@ -92,7 +92,7 @@ func newService(t *testing.T, transport transportFunc) (*application.Service, *p
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := application.New(context.Background(), geoimport.Decoder{}, openmeteo.Client{HTTP: &http.Client{Transport: transport}, Endpoint: "https://example.test"}, store)
+	service, err := application.New(geoimport.Decoder{}, openmeteo.Client{HTTP: &http.Client{Transport: transport}, Endpoint: "https://example.test"}, store)
 	if err != nil {
 		t.Fatal(err)
 	}
